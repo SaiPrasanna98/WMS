@@ -1,15 +1,15 @@
-import db from '../db';
+import { queryAll, queryOne, queryRun, sqlNow } from '../db/query';
 import { createAuditLog } from './inventory';
 
-export function generateInvoiceNumber(): string {
+export async function generateInvoiceNumber(): Promise<string> {
   const year = new Date().getFullYear();
   const prefix = `INV-${year}-`;
-  const row = db.prepare(`
+  const row = await queryOne<{ max_seq: number | null }>(`
     SELECT MAX(CAST(SUBSTR(invoice_number, ? + 1) AS INTEGER)) as max_seq
     FROM invoices
     WHERE invoice_number LIKE ?
-  `).get(prefix.length, `${prefix}%`) as { max_seq: number | null };
-  const next = (row.max_seq ?? 0) + 1;
+  `, prefix.length, `${prefix}%`);
+  const next = (row?.max_seq ?? 0) + 1;
   return `${prefix}${String(next).padStart(5, '0')}`;
 }
 
@@ -21,13 +21,13 @@ export interface InvoiceTotals {
   totalAmount: number;
 }
 
-export function calculateOrderInvoiceTotals(orderId: number, priority: string): InvoiceTotals {
-  const items = db.prepare(`
+export async function calculateOrderInvoiceTotals(orderId: number, priority: string): Promise<InvoiceTotals> {
+  const items = await queryAll<{ quantity_ordered: number; unit_price: number }>(`
     SELECT oi.quantity_ordered, COALESCE(p.unit_price, 0) as unit_price
     FROM order_items oi
     JOIN products p ON p.id = oi.product_id
     WHERE oi.order_id = ?
-  `).all(orderId) as Array<{ quantity_ordered: number; unit_price: number }>;
+  `, orderId);
 
   const subtotal = items.reduce((sum, i) => sum + i.quantity_ordered * i.unit_price, 0);
   const totalUnits = items.reduce((sum, i) => sum + i.quantity_ordered, 0);
@@ -40,27 +40,31 @@ export function calculateOrderInvoiceTotals(orderId: number, priority: string): 
   return { subtotal, handlingFee, shippingFee, taxAmount, totalAmount };
 }
 
-export function createQuoteInvoice(orderId: number, userId: number): number {
-  const existing = db.prepare('SELECT id FROM invoices WHERE order_id = ?').get(orderId) as { id: number } | undefined;
+export async function createQuoteInvoice(orderId: number, userId: number): Promise<number> {
+  const existing = await queryOne<{ id: number }>(
+    'SELECT id FROM invoices WHERE order_id = ?',
+    orderId
+  );
   if (existing) return existing.id;
 
-  const order = db.prepare('SELECT customer_id, priority FROM orders WHERE id = ?').get(orderId) as {
-    customer_id: number; priority: string;
-  } | undefined;
+  const order = await queryOne<{ customer_id: number; priority: string }>(
+    'SELECT customer_id, priority FROM orders WHERE id = ?',
+    orderId
+  );
   if (!order) throw new Error('Order not found');
 
-  const totals = calculateOrderInvoiceTotals(orderId, order.priority);
-  const invoiceNumber = generateInvoiceNumber();
+  const totals = await calculateOrderInvoiceTotals(orderId, order.priority);
+  const invoiceNumber = await generateInvoiceNumber();
   const dueDate = new Date();
   dueDate.setDate(dueDate.getDate() + 30);
 
-  const result = db.prepare(`
+  const result = await queryRun(`
     INSERT INTO invoices (
       invoice_number, order_id, customer_id, status,
       subtotal, handling_fee, shipping_fee, tax_amount, total_amount,
       issued_at, due_date, notes
-    ) VALUES (?, ?, ?, 'QUOTE', ?, ?, ?, ?, ?, datetime('now'), ?, ?)
-  `).run(
+    ) VALUES (?, ?, ?, 'QUOTE', ?, ?, ?, ?, ?, ${sqlNow()}, ?, ?)
+  `,
     invoiceNumber, orderId, order.customer_id,
     totals.subtotal, totals.handlingFee, totals.shippingFee, totals.taxAmount, totals.totalAmount,
     dueDate.toISOString().slice(0, 10),
@@ -69,23 +73,22 @@ export function createQuoteInvoice(orderId: number, userId: number): number {
 
   const invoiceId = Number(result.lastInsertRowid);
 
-  const items = db.prepare(`
+  const items = await queryAll<{ product_id: number; quantity_ordered: number; name: string; unit_price: number }>(`
     SELECT oi.product_id, oi.quantity_ordered, p.name, COALESCE(p.unit_price, 0) as unit_price
     FROM order_items oi JOIN products p ON p.id = oi.product_id WHERE oi.order_id = ?
-  `).all(orderId) as Array<{ product_id: number; quantity_ordered: number; name: string; unit_price: number }>;
+  `, orderId);
 
-  const insertLine = db.prepare(`
-    INSERT INTO invoice_line_items (invoice_id, product_id, description, quantity, unit_price, line_total)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
   for (const item of items) {
-    insertLine.run(
+    await queryRun(`
+      INSERT INTO invoice_line_items (invoice_id, product_id, description, quantity, unit_price, line_total)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `,
       invoiceId, item.product_id, item.name, item.quantity_ordered,
       item.unit_price, item.quantity_ordered * item.unit_price
     );
   }
 
-  createAuditLog({
+  await createAuditLog({
     userId, action: 'CREATE', entityType: 'invoice', entityId: invoiceId,
     newValue: { invoiceNumber, orderId, status: 'QUOTE', total: totals.totalAmount },
   });
@@ -93,46 +96,47 @@ export function createQuoteInvoice(orderId: number, userId: number): number {
   return invoiceId;
 }
 
-export function sendInvoice(invoiceId: number, userId: number): void {
-  db.prepare(`
-    UPDATE invoices SET status = 'SENT', updated_at = datetime('now') WHERE id = ? AND status IN ('QUOTE', 'SENT')
-  `).run(invoiceId);
-  createAuditLog({ userId, action: 'UPDATE', entityType: 'invoice', entityId: invoiceId, newValue: { status: 'SENT' } });
+export async function sendInvoice(invoiceId: number, userId: number): Promise<void> {
+  await queryRun(`
+    UPDATE invoices SET status = 'SENT', updated_at = ${sqlNow()} WHERE id = ? AND status IN ('QUOTE', 'SENT')
+  `, invoiceId);
+  await createAuditLog({ userId, action: 'UPDATE', entityType: 'invoice', entityId: invoiceId, newValue: { status: 'SENT' } });
 }
 
-export function markInvoicePaid(invoiceId: number, userId: number): void {
-  db.prepare(`
-    UPDATE invoices SET status = 'PAID', paid_at = datetime('now'), updated_at = datetime('now') WHERE id = ?
-  `).run(invoiceId);
-  createAuditLog({ userId, action: 'UPDATE', entityType: 'invoice', entityId: invoiceId, newValue: { status: 'PAID' } });
+export async function markInvoicePaid(invoiceId: number, userId: number): Promise<void> {
+  await queryRun(`
+    UPDATE invoices SET status = 'PAID', paid_at = ${sqlNow()}, updated_at = ${sqlNow()} WHERE id = ?
+  `, invoiceId);
+  await createAuditLog({ userId, action: 'UPDATE', entityType: 'invoice', entityId: invoiceId, newValue: { status: 'PAID' } });
 }
 
-export function finalizeInvoiceOnDelivery(orderId: number, userId: number): void {
-  const invoice = db.prepare('SELECT id, status FROM invoices WHERE order_id = ?').get(orderId) as {
-    id: number; status: string;
-  } | undefined;
+export async function finalizeInvoiceOnDelivery(orderId: number, userId: number): Promise<void> {
+  const invoice = await queryOne<{ id: number; status: string }>(
+    'SELECT id, status FROM invoices WHERE order_id = ?',
+    orderId
+  );
   if (!invoice) return;
   if (invoice.status === 'PAID' || invoice.status === 'VOID') return;
 
-  db.prepare(`
-    UPDATE invoices SET status = 'SENT', updated_at = datetime('now') WHERE id = ?
-  `).run(invoice.id);
+  await queryRun(`
+    UPDATE invoices SET status = 'SENT', updated_at = ${sqlNow()} WHERE id = ?
+  `, invoice.id);
 
-  createAuditLog({
+  await createAuditLog({
     userId, action: 'UPDATE', entityType: 'invoice', entityId: invoice.id,
     newValue: { status: 'SENT', event: 'DELIVERY_COMPLETED' },
   });
 }
 
-export function enrichInvoice(invoiceId: number) {
-  const invoice = db.prepare(`
+export async function enrichInvoice(invoiceId: number) {
+  const invoice = await queryOne(`
     SELECT i.*, o.order_number, c.name as customer_name
     FROM invoices i
     JOIN orders o ON o.id = i.order_id
     JOIN customers c ON c.id = i.customer_id
     WHERE i.id = ?
-  `).get(invoiceId);
+  `, invoiceId);
   if (!invoice) return null;
-  const lineItems = db.prepare('SELECT * FROM invoice_line_items WHERE invoice_id = ?').all(invoiceId);
+  const lineItems = await queryAll('SELECT * FROM invoice_line_items WHERE invoice_id = ?', invoiceId);
   return { ...invoice, lineItems };
 }

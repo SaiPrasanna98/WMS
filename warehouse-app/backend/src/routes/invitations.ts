@@ -1,6 +1,5 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
-import db from '../db';
 import { authenticate } from '../middleware/auth';
 import { requirePermission, blockViewerWrite } from '../middleware/rbac';
 import { createAuditLog } from '../services/inventory';
@@ -10,15 +9,16 @@ import {
   getOrganizationSettings,
   parseRoleIds,
 } from '../services/organization';
+import { queryOne, queryAll, queryRun, transaction, sqlNow } from '../db/query';
 
 const router = Router();
 
-function enrichInvitation(row: Record<string, unknown>) {
+async function enrichInvitation(row: Record<string, unknown>) {
   const roleIds = parseRoleIds(String(row.role_ids));
   const roles = roleIds.length
-    ? db.prepare(`SELECT id, name FROM roles WHERE id IN (${roleIds.map(() => '?').join(',')})`).all(...roleIds)
+    ? await queryAll(`SELECT id, name FROM roles WHERE id IN (${roleIds.map(() => '?').join(',')})`, ...roleIds)
     : [];
-  const inviter = db.prepare('SELECT full_name, email FROM users WHERE id = ?').get(row.invited_by) as
+  const inviter = await queryOne('SELECT full_name, email FROM users WHERE id = ?', row.invited_by) as
     { full_name: string; email: string } | undefined;
   return {
     ...row,
@@ -29,42 +29,42 @@ function enrichInvitation(row: Record<string, unknown>) {
   };
 }
 
-router.get('/verify', (req: Request, res: Response) => {
+router.get('/verify', async (req: Request, res: Response) => {
   const token = String(req.query.token ?? '');
   if (!token) {
     res.status(400).json({ error: 'Invitation token is required' });
     return;
   }
 
-  const invite = db.prepare(`
+  const invite = await queryOne(`
     SELECT email, full_name, role_ids, status, expires_at FROM user_invitations WHERE token = ?
-  `).get(token) as Record<string, unknown> | undefined;
+  `, token) as Record<string, unknown> | undefined;
 
   if (!invite || invite.status !== 'PENDING') {
     res.status(404).json({ error: 'Invitation not found or no longer valid' });
     return;
   }
   if (new Date(String(invite.expires_at)) < new Date()) {
-    db.prepare(`UPDATE user_invitations SET status = 'EXPIRED' WHERE token = ?`).run(token);
+    await queryRun(`UPDATE user_invitations SET status = 'EXPIRED' WHERE token = ?`, token);
     res.status(410).json({ error: 'Invitation has expired' });
     return;
   }
 
   const roleIds = parseRoleIds(String(invite.role_ids));
   const roles = roleIds.length
-    ? db.prepare(`SELECT id, name FROM roles WHERE id IN (${roleIds.map(() => '?').join(',')})`).all(...roleIds)
+    ? await queryAll(`SELECT id, name FROM roles WHERE id IN (${roleIds.map(() => '?').join(',')})`, ...roleIds)
     : [];
 
   res.json({
     email: invite.email,
     fullName: invite.full_name,
     roles,
-    orgName: getOrganizationSettings().orgName,
+    orgName: (await getOrganizationSettings()).orgName,
     expiresAt: invite.expires_at,
   });
 });
 
-router.post('/accept', (req: Request, res: Response) => {
+router.post('/accept', async (req: Request, res: Response) => {
   const { token, password, fullName } = req.body;
   if (!token || !password) {
     res.status(400).json({ error: 'Token and password are required' });
@@ -75,14 +75,14 @@ router.post('/accept', (req: Request, res: Response) => {
     return;
   }
 
-  const invite = db.prepare('SELECT * FROM user_invitations WHERE token = ?').get(token) as
+  const invite = await queryOne('SELECT * FROM user_invitations WHERE token = ?', token) as
     Record<string, unknown> | undefined;
   if (!invite || invite.status !== 'PENDING') {
     res.status(404).json({ error: 'Invitation not found or no longer valid' });
     return;
   }
   if (new Date(String(invite.expires_at)) < new Date()) {
-    db.prepare(`UPDATE user_invitations SET status = 'EXPIRED' WHERE id = ?`).run(invite.id);
+    await queryRun(`UPDATE user_invitations SET status = 'EXPIRED' WHERE id = ?`, invite.id);
     res.status(410).json({ error: 'Invitation has expired' });
     return;
   }
@@ -92,26 +92,26 @@ router.post('/accept', (req: Request, res: Response) => {
   const roleIds = parseRoleIds(String(invite.role_ids));
 
   try {
-    const userId = db.transaction(() => {
+    const userId = await transaction(async () => {
       const hash = bcrypt.hashSync(password, 10);
-      const result = db.prepare(`
+      const result = await queryRun(`
         INSERT INTO users (email, password_hash, full_name) VALUES (?, ?, ?)
-      `).run(email, hash, displayName);
+      `, email, hash, displayName);
       const newUserId = Number(result.lastInsertRowid);
 
-      const insertRole = db.prepare('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)');
+
       for (const roleId of roleIds) {
-        insertRole.run(newUserId, roleId);
+        await queryRun('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)', newUserId, roleId);
       }
 
-      db.prepare(`
-        UPDATE user_invitations SET status = 'ACCEPTED', accepted_at = datetime('now') WHERE id = ?
-      `).run(invite.id);
+      await queryRun(`
+        UPDATE user_invitations SET status = 'ACCEPTED', accepted_at = ${sqlNow()} WHERE id = ?
+      `, invite.id);
 
       return newUserId;
-    })();
+    });
 
-    createAuditLog({
+    await createAuditLog({
       userId,
       action: 'CREATE',
       entityType: 'user',
@@ -127,18 +127,18 @@ router.post('/accept', (req: Request, res: Response) => {
 
 router.use(authenticate);
 
-router.get('/', requirePermission('users.read'), (_req: Request, res: Response) => {
-  const rows = db.prepare(`
+router.get('/', requirePermission('users.read'), async (_req: Request, res: Response) => {
+  const rows = await queryAll(`
     SELECT i.*, u.full_name as invited_by_name
     FROM user_invitations i
     JOIN users u ON u.id = i.invited_by
-    WHERE i.status = 'PENDING' AND datetime(i.expires_at) > datetime('now')
+    WHERE i.status = 'PENDING' AND datetime(i.expires_at) > ${sqlNow()}
     ORDER BY i.created_at DESC
-  `).all() as Record<string, unknown>[];
+  `) as Record<string, unknown>[];
   res.json(rows.map(enrichInvitation));
 });
 
-router.post('/', requirePermission('users.write'), blockViewerWrite, (req: Request, res: Response) => {
+router.post('/', requirePermission('users.write'), blockViewerWrite, async (req: Request, res: Response) => {
   const { email, fullName, roleIds } = req.body;
   if (!email || !fullName || !roleIds?.length) {
     res.status(400).json({ error: 'Email, full name, and at least one role are required' });
@@ -146,46 +146,46 @@ router.post('/', requirePermission('users.write'), blockViewerWrite, (req: Reque
   }
 
   try {
-    assertEmailDomainAllowed(email);
+    await assertEmailDomainAllowed(email);
   } catch (err) {
     res.status(400).json({ error: (err as Error).message });
     return;
   }
 
   const normalizedEmail = String(email).trim().toLowerCase();
-  const existingUser = db.prepare('SELECT id FROM users WHERE lower(email) = ?').get(normalizedEmail);
+  const existingUser = await queryOne('SELECT id FROM users WHERE lower(email) = ?', normalizedEmail);
   if (existingUser) {
     res.status(400).json({ error: 'A user with this email already exists' });
     return;
   }
 
-  const pending = db.prepare(`
-    SELECT id FROM user_invitations WHERE lower(email) = ? AND status = 'PENDING' AND datetime(expires_at) > datetime('now')
-  `).get(normalizedEmail);
+  const pending = await queryOne(`
+    SELECT id FROM user_invitations WHERE lower(email) = ? AND status = 'PENDING' AND datetime(expires_at) > ${sqlNow()}
+  `, normalizedEmail);
   if (pending) {
     res.status(400).json({ error: 'A pending invitation already exists for this email' });
     return;
   }
 
   for (const roleId of roleIds) {
-    const role = db.prepare('SELECT id FROM roles WHERE id = ?').get(roleId);
+    const role = await queryOne('SELECT id FROM roles WHERE id = ?', roleId);
     if (!role) {
       res.status(400).json({ error: `Invalid role ID: ${roleId}` });
       return;
     }
   }
 
-  const { inviteExpiryDays } = getOrganizationSettings();
+  const { inviteExpiryDays } = await getOrganizationSettings();
   const token = generateInviteToken();
   const expiresAt = new Date();
   expiresAt.setDate(expiresAt.getDate() + inviteExpiryDays);
 
-  const result = db.prepare(`
+  const result = await queryRun(`
     INSERT INTO user_invitations (email, full_name, role_ids, invited_by, token, expires_at)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(normalizedEmail, fullName, JSON.stringify(roleIds), req.user!.id, token, expiresAt.toISOString());
+  `, normalizedEmail, fullName, JSON.stringify(roleIds), req.user!.id, token, expiresAt.toISOString());
 
-  createAuditLog({
+  await createAuditLog({
     userId: req.user!.id,
     action: 'CREATE',
     entityType: 'user_invitation',
@@ -206,9 +206,9 @@ router.post('/', requirePermission('users.write'), blockViewerWrite, (req: Reque
   });
 });
 
-router.post('/:id/revoke', requirePermission('users.write'), blockViewerWrite, (req: Request, res: Response) => {
+router.post('/:id/revoke', requirePermission('users.write'), blockViewerWrite, async (req: Request, res: Response) => {
   const inviteId = Number(req.params.id);
-  const invite = db.prepare('SELECT * FROM user_invitations WHERE id = ?').get(inviteId) as
+  const invite = await queryOne('SELECT * FROM user_invitations WHERE id = ?', inviteId) as
     { status: string; email: string } | undefined;
   if (!invite) {
     res.status(404).json({ error: 'Invitation not found' });
@@ -219,8 +219,8 @@ router.post('/:id/revoke', requirePermission('users.write'), blockViewerWrite, (
     return;
   }
 
-  db.prepare(`UPDATE user_invitations SET status = 'REVOKED' WHERE id = ?`).run(inviteId);
-  createAuditLog({
+  await queryRun(`UPDATE user_invitations SET status = 'REVOKED' WHERE id = ?`, inviteId);
+  await createAuditLog({
     userId: req.user!.id,
     action: 'UPDATE',
     entityType: 'user_invitation',

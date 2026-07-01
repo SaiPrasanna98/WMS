@@ -1,4 +1,4 @@
-import db from '../db';
+import { queryAll, queryOne, queryRun, sqlNow } from '../db/query';
 import {
   checkOrderInventory,
   confirmOrder,
@@ -23,7 +23,7 @@ export interface OrderPipeline {
   orderNumber: string;
   orderStatus: string;
   steps: PipelineStep[];
-  inventory: { sufficient: boolean; lines: ReturnType<typeof checkOrderInventory>['lines'] };
+  inventory: { sufficient: boolean; lines: Awaited<ReturnType<typeof checkOrderInventory>>['lines'] };
   promise: {
     estimatedPickDate?: string;
     estimatedPackDate?: string;
@@ -37,33 +37,36 @@ export interface OrderPipeline {
   blockers: string[];
 }
 
-function getQueueDelayDays(): number {
-  const openPicks = db.prepare(`
+async function getQueueDelayDays(): Promise<number> {
+  const openPicks = await queryOne<{ c: number }>(`
     SELECT COUNT(*) as c FROM fulfillment_tasks WHERE task_type = 'PICK' AND status IN ('PENDING', 'IN_PROGRESS')
-  `).get() as { c: number };
-  const openPacks = db.prepare(`
+  `);
+  const openPacks = await queryOne<{ c: number }>(`
     SELECT COUNT(*) as c FROM fulfillment_tasks WHERE task_type = 'PACK' AND status IN ('PENDING', 'IN_PROGRESS')
-  `).get() as { c: number };
-  const busyDrivers = db.prepare(`
+  `);
+  const busyDrivers = await queryOne<{ c: number }>(`
     SELECT COUNT(DISTINCT driver_id) as c FROM deliveries
     WHERE status IN ('ASSIGNED', 'ARRIVED_AT_WAREHOUSE', 'PICKED_UP', 'IN_TRANSIT')
-  `).get() as { c: number };
-  const totalDrivers = db.prepare(`SELECT COUNT(*) as c FROM drivers WHERE is_active = 1`).get() as { c: number };
+  `);
+  const totalDrivers = await queryOne<{ c: number }>(
+    `SELECT COUNT(*) as c FROM drivers WHERE is_active = 1`
+  );
 
-  let delay = Math.floor(openPicks.c / 3) + Math.floor(openPacks.c / 3);
-  if (totalDrivers.c > 0 && busyDrivers.c >= totalDrivers.c) delay += 1;
+  let delay = Math.floor((openPicks?.c ?? 0) / 3) + Math.floor((openPacks?.c ?? 0) / 3);
+  if ((totalDrivers?.c ?? 0) > 0 && (busyDrivers?.c ?? 0) >= (totalDrivers?.c ?? 0)) delay += 1;
   return delay;
 }
 
-export function applyPromiseDates(orderId: number, priority: string): void {
-  const items = db.prepare('SELECT quantity_ordered FROM order_items WHERE order_id = ?').all(orderId) as Array<{
-    quantity_ordered: number;
-  }>;
+export async function applyPromiseDates(orderId: number, priority: string): Promise<void> {
+  const items = await queryAll<{ quantity_ordered: number }>(
+    'SELECT quantity_ordered FROM order_items WHERE order_id = ?',
+    orderId
+  );
   const totalUnits = items.reduce((s, i) => s + i.quantity_ordered, 0);
-  const queueDelay = getQueueDelayDays();
+  const queueDelay = await getQueueDelayDays();
   const promise = calculateOrderPromise(priority, totalUnits, items.length, queueDelay);
 
-  db.prepare(`
+  await queryRun(`
     UPDATE orders SET
       estimated_pick_date = ?,
       estimated_pack_date = ?,
@@ -71,9 +74,9 @@ export function applyPromiseDates(orderId: number, priority: string): void {
       estimated_delivery_date = ?,
       estimated_transit_days = ?,
       promise_notes = ?,
-      updated_at = datetime('now')
+      updated_at = ${sqlNow()}
     WHERE id = ?
-  `).run(
+  `,
     promise.estimatedPickDate, promise.estimatedPackDate,
     promise.estimatedShipDate, promise.estimatedDeliveryDate,
     promise.estimatedTransitDays, promise.promiseNotes,
@@ -82,81 +85,93 @@ export function applyPromiseDates(orderId: number, priority: string): void {
 }
 
 /** Runs when a new order is created — connects invoice, promise dates, and auto-confirm if stock is available. */
-export function onOrderCreated(orderId: number, userId: number): OrderPipeline {
-  const order = db.prepare('SELECT order_number, priority, status FROM orders WHERE id = ?').get(orderId) as {
-    order_number: string; priority: string; status: string;
-  };
+export async function onOrderCreated(orderId: number, userId: number): Promise<OrderPipeline> {
+  const order = await queryOne<{ order_number: string; priority: string; status: string }>(
+    'SELECT order_number, priority, status FROM orders WHERE id = ?',
+    orderId
+  );
+  if (!order) throw new Error('Order not found');
 
-  applyPromiseDates(orderId, order.priority);
-  createQuoteInvoice(orderId, userId);
+  await applyPromiseDates(orderId, order.priority);
+  await createQuoteInvoice(orderId, userId);
 
-  const check = checkOrderInventory(orderId);
+  const check = await checkOrderInventory(orderId);
 
   if (check.sufficient) {
     try {
-      confirmOrder(orderId, userId, false);
-      logOrderAudit(userId, orderId, 'AUTO_CONFIRMED', 'INVENTORY_CHECK', 'ALLOCATED', { reason: 'Stock available at order creation' });
+      await confirmOrder(orderId, userId, false);
+      await logOrderAudit(userId, orderId, 'AUTO_CONFIRMED', 'INVENTORY_CHECK', 'ALLOCATED', { reason: 'Stock available at order creation' });
     } catch {
       // confirm may fail if race condition — stay in inventory check
     }
   }
 
-  const full = db.prepare(`
+  const full = await queryOne<{ customer_id: number; order_number: string; estimated_delivery_date?: string }>(`
     SELECT o.customer_id, o.order_number, o.estimated_delivery_date FROM orders o WHERE o.id = ?
-  `).get(orderId) as { customer_id: number; order_number: string; estimated_delivery_date?: string };
-  const invoice = db.prepare('SELECT invoice_number FROM invoices WHERE order_id = ?').get(orderId) as
-    { invoice_number: string } | undefined;
-  try {
-    notifyOrderCreated(
-      full.customer_id,
-      orderId,
-      full.order_number,
-      full.estimated_delivery_date,
-      invoice?.invoice_number,
-    );
-  } catch {
-    // notification failure must not block order creation
+  `, orderId);
+  const invoice = await queryOne<{ invoice_number: string }>(
+    'SELECT invoice_number FROM invoices WHERE order_id = ?',
+    orderId
+  );
+  if (full) {
+    try {
+      await notifyOrderCreated(
+        full.customer_id,
+        orderId,
+        full.order_number,
+        full.estimated_delivery_date,
+        invoice?.invoice_number,
+      );
+    } catch {
+      // notification failure must not block order creation
+    }
   }
 
   return getOrderPipeline(orderId);
 }
 
-export function getOrderPipeline(orderId: number): OrderPipeline {
-  const order = db.prepare(`
+export async function getOrderPipeline(orderId: number): Promise<OrderPipeline> {
+  const order = await queryOne<Record<string, unknown>>(`
     SELECT o.*, c.name as customer_name
     FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.id = ?
-  `).get(orderId) as Record<string, unknown> | undefined;
+  `, orderId);
 
   if (!order) throw new Error('Order not found');
 
   const status = String(order.status);
-  const check = checkOrderInventory(orderId);
+  const check = await checkOrderInventory(orderId);
 
-  const invoice = db.prepare(`
+  const invoice = await queryOne<{ id: number; invoice_number: string; status: string; total_amount: number }>(`
     SELECT id, invoice_number, status, total_amount FROM invoices WHERE order_id = ?
-  `).get(orderId) as { id: number; invoice_number: string; status: string; total_amount: number } | undefined;
+  `, orderId);
 
-  const delivery = db.prepare(`
+  const delivery = await queryOne<Record<string, unknown>>(`
     SELECT d.id, d.status, d.tracking_number, d.carrier_name, u.full_name as driver_name
     FROM deliveries d
     LEFT JOIN drivers dr ON dr.id = d.driver_id
     LEFT JOIN users u ON u.id = dr.user_id
     WHERE d.order_id = ? AND d.status NOT IN ('DELIVERY_FAILED')
     ORDER BY d.id DESC LIMIT 1
-  `).get(orderId) as Record<string, unknown> | undefined;
+  `, orderId);
 
-  const hasReservation = db.prepare(`
+  const hasReservation = await queryOne<{ c: number }>(`
     SELECT COUNT(*) as c FROM inventory_reservations WHERE order_id = ? AND status != 'RELEASED'
-  `).get(orderId) as { c: number };
+  `, orderId);
 
-  const hasPickList = db.prepare(`SELECT COUNT(*) as c FROM pick_lists WHERE order_id = ?`).get(orderId) as { c: number };
-  const hasPackages = db.prepare(`SELECT COUNT(*) as c FROM packages WHERE order_id = ?`).get(orderId) as { c: number };
+  const hasPickList = await queryOne<{ c: number }>(
+    `SELECT COUNT(*) as c FROM pick_lists WHERE order_id = ?`,
+    orderId
+  );
+  const hasPackages = await queryOne<{ c: number }>(
+    `SELECT COUNT(*) as c FROM packages WHERE order_id = ?`,
+    orderId
+  );
 
   const blockers: string[] = [];
-  if (!check.sufficient && !hasReservation.c) {
+  if (!check.sufficient && !(hasReservation?.c ?? 0)) {
     blockers.push('Insufficient stock — receive inventory or use manager override on confirm');
   }
-  if (Number(order.manager_override) === 1 && status === 'CONFIRMED' && !hasReservation.c) {
+  if (Number(order.manager_override) === 1 && status === 'CONFIRMED' && !(hasReservation?.c ?? 0)) {
     blockers.push('Order confirmed without stock — click Allocate stock on Warehouse tasks');
   }
 
@@ -176,7 +191,7 @@ export function getOrderPipeline(orderId: number): OrderPipeline {
     {
       id: 'inventory',
       label: 'Inventory reserved',
-      status: hasReservation.c > 0 ? 'done'
+      status: (hasReservation?.c ?? 0) > 0 ? 'done'
         : check.sufficient && ['INVENTORY_CHECK', 'NEW'].includes(status) ? 'active'
           : status === 'CANCELLED' ? 'skipped'
             : check.sufficient ? 'pending' : 'blocked',
@@ -188,13 +203,13 @@ export function getOrderPipeline(orderId: number): OrderPipeline {
       id: 'pick',
       label: 'Pick items',
       status: ['PICKING', 'PACKING', 'READY_FOR_PICKUP', 'IN_TRANSIT', 'DELIVERED'].includes(status) ? 'done'
-        : hasPickList.c > 0 ? 'active' : ['ALLOCATED'].includes(status) ? 'active' : 'pending',
+        : (hasPickList?.c ?? 0) > 0 ? 'active' : ['ALLOCATED'].includes(status) ? 'active' : 'pending',
     },
     {
       id: 'pack',
       label: 'Pack & label',
       status: ['READY_FOR_PICKUP', 'IN_TRANSIT', 'DELIVERED'].includes(status) ? 'done'
-        : hasPackages.c > 0 ? 'active' : status === 'PACKING' ? 'active' : 'pending',
+        : (hasPackages?.c ?? 0) > 0 ? 'active' : status === 'PACKING' ? 'active' : 'pending',
     },
     {
       id: 'dispatch',
@@ -213,7 +228,7 @@ export function getOrderPipeline(orderId: number): OrderPipeline {
   let nextAction = 'Waiting';
   if (status === 'CANCELLED') nextAction = 'Order cancelled';
   else if (['NEW', 'INVENTORY_CHECK'].includes(status) && check.sufficient) nextAction = 'Confirm order (or was auto-confirmed if stock available)';
-  else if (status === 'CONFIRMED' && !hasReservation.c) nextAction = 'Allocate stock on Warehouse tasks';
+  else if (status === 'CONFIRMED' && !(hasReservation?.c ?? 0)) nextAction = 'Allocate stock on Warehouse tasks';
   else if (status === 'ALLOCATED') nextAction = 'Start picking on Warehouse tasks';
   else if (status === 'PICKING') nextAction = 'Complete pick on Warehouse tasks';
   else if (status === 'PACKING') nextAction = 'Pack order on Warehouse tasks';
@@ -247,16 +262,19 @@ export function getOrderPipeline(orderId: number): OrderPipeline {
 }
 
 /** Re-run allocation for confirmed orders when stock arrives. */
-export function tryAllocateOrder(orderId: number, userId: number): void {
-  const order = db.prepare('SELECT status FROM orders WHERE id = ?').get(orderId) as { status: string } | undefined;
+export async function tryAllocateOrder(orderId: number, userId: number): Promise<void> {
+  const order = await queryOne<{ status: string }>(
+    'SELECT status FROM orders WHERE id = ?',
+    orderId
+  );
   if (!order || order.status !== 'CONFIRMED') {
     throw new Error('Only confirmed orders waiting on stock can be allocated');
   }
-  const check = checkOrderInventory(orderId);
+  const check = await checkOrderInventory(orderId);
   if (!check.sufficient) throw new Error('Still insufficient inventory');
 
-  reserveInventoryForOrder(orderId, userId);
-  updateOrderStatus(orderId, 'ALLOCATED');
-  createPickList(orderId);
-  logOrderAudit(userId, orderId, 'ORDER_ALLOCATED', 'CONFIRMED', 'ALLOCATED');
+  await reserveInventoryForOrder(orderId, userId);
+  await updateOrderStatus(orderId, 'ALLOCATED');
+  await createPickList(orderId);
+  await logOrderAudit(userId, orderId, 'ORDER_ALLOCATED', 'CONFIRMED', 'ALLOCATED');
 }

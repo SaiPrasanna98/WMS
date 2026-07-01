@@ -1,16 +1,16 @@
 import { Router, Request, Response } from 'express';
-import db from '../db';
 import { authenticate } from '../middleware/auth';
 import { requirePermission, blockViewerWrite } from '../middleware/rbac';
 import { createAuditLog, createInventoryTransaction, ensureNonNegativeInventory, getProductInventory } from '../services/inventory';
 import { getAtpQuantity, getReservedQuantity } from '../services/fulfillment';
 import { assertPositiveQuantity } from '../services/validation';
+import { queryOne, queryAll, queryRun, sqlNow } from '../db/query';
 
 const router = Router();
 
 router.use(authenticate);
 
-router.get('/', requirePermission('inventory.read'), (req: Request, res: Response) => {
+router.get('/', requirePermission('inventory.read'), async (req: Request, res: Response) => {
   const { search, type, stock } = req.query;
 
   let query = 'SELECT * FROM products WHERE is_active = 1';
@@ -26,7 +26,7 @@ router.get('/', requirePermission('inventory.read'), (req: Request, res: Respons
   }
   query += ' ORDER BY name';
 
-  const products = db.prepare(query).all(...params) as {
+  const products = await queryAll(query, ...params) as {
     id: number;
     sku: string;
     name: string;
@@ -35,13 +35,13 @@ router.get('/', requirePermission('inventory.read'), (req: Request, res: Respons
     reorder_level: number;
   }[];
 
-  let items = products.map(p => {
-    const onHand = getProductInventory(p.id);
-    const reserved = getReservedQuantity(p.id);
-    const atp = getAtpQuantity(p.id);
-    const palletCount = db.prepare(`
+  let items = await Promise.all(products.map(async (p) => {
+    const onHand = await getProductInventory(p.id);
+    const reserved = await getReservedQuantity(p.id);
+    const atp = await getAtpQuantity(p.id);
+    const palletCount = await queryOne(`
       SELECT COUNT(*) as count FROM pallets WHERE product_id = ? AND status = 'ACTIVE' AND quantity > 0
-    `).get(p.id) as { count: number };
+    `, p.id) as { count: number };
 
     let stockStatus: 'OK' | 'LOW' | 'OUT' = 'OK';
     if (onHand <= 0) stockStatus = 'OUT';
@@ -60,7 +60,7 @@ router.get('/', requirePermission('inventory.read'), (req: Request, res: Respons
       palletCount: palletCount.count,
       stockStatus,
     };
-  });
+  }));
 
   if (stock === 'low') items = items.filter(i => i.stockStatus === 'LOW');
   if (stock === 'out') items = items.filter(i => i.stockStatus === 'OUT');
@@ -75,7 +75,7 @@ router.get('/', requirePermission('inventory.read'), (req: Request, res: Respons
   res.json({ summary, items });
 });
 
-router.post('/adjust', requirePermission('inventory.adjust'), blockViewerWrite, (req: Request, res: Response) => {
+router.post('/adjust', requirePermission('inventory.adjust'), blockViewerWrite, async (req: Request, res: Response) => {
   const { palletId, newQuantity, reason } = req.body;
   if (!palletId || newQuantity === undefined) {
     res.status(400).json({ error: 'Pallet ID and new quantity are required' });
@@ -88,10 +88,10 @@ router.post('/adjust', requirePermission('inventory.adjust'), blockViewerWrite, 
     return;
   }
 
-  const pallet = db.prepare(`
+  const pallet = await queryOne(`
     SELECT pl.*, l.qc_status FROM pallets pl
     JOIN lots l ON l.id = pl.lot_id WHERE pl.id = ?
-  `).get(Number(palletId)) as {
+  `, Number(palletId)) as {
     id: number; product_id: number; lot_id: number; quantity: number; location_id: number | null; status: string;
   } | undefined;
 
@@ -103,16 +103,16 @@ router.post('/adjust', requirePermission('inventory.adjust'), blockViewerWrite, 
 
   const delta = qty - pallet.quantity;
   if (delta < 0) {
-    ensureNonNegativeInventory(pallet.product_id, delta);
+    await ensureNonNegativeInventory(pallet.product_id, delta);
   }
 
   const newStatus = qty === 0 ? 'DEPLETED' : (pallet.status === 'DEPLETED' && qty > 0 ? 'ACTIVE' : pallet.status);
 
-  db.prepare(`
-    UPDATE pallets SET quantity = ?, status = ?, updated_at = datetime('now') WHERE id = ?
-  `).run(qty, newStatus, pallet.id);
+  await queryRun(`
+    UPDATE pallets SET quantity = ?, status = ?, updated_at = ${sqlNow()} WHERE id = ?
+  `, qty, newStatus, pallet.id);
 
-  createInventoryTransaction({
+  await createInventoryTransaction({
     transactionType: 'ADJUST',
     productId: pallet.product_id,
     lotId: pallet.lot_id,
@@ -123,7 +123,7 @@ router.post('/adjust', requirePermission('inventory.adjust'), blockViewerWrite, 
     notes: reason || `Cycle count adjustment: ${pallet.quantity} → ${qty}`,
   });
 
-  createAuditLog({
+  await createAuditLog({
     userId: req.user!.id,
     action: 'UPDATE',
     entityType: 'pallet',

@@ -1,17 +1,17 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
-import db from '../db';
 import { authenticate } from '../middleware/auth';
 import { requirePermission, blockViewerWrite } from '../middleware/rbac';
 import { createAuditLog } from '../services/inventory';
 import { assertEmailDomainAllowed } from '../services/organization';
+import { queryOne, queryAll, queryRun } from '../db/query';
 
 const router = Router();
 
 router.use(authenticate);
 
-router.get('/', requirePermission('users.read'), (_req: Request, res: Response) => {
-  const users = db.prepare(`
+router.get('/', requirePermission('users.read'), async (_req: Request, res: Response) => {
+  const users = await queryAll(`
     SELECT u.id, u.email, u.full_name, u.is_active, u.created_at,
            GROUP_CONCAT(r.name) as roles
     FROM users u
@@ -19,25 +19,25 @@ router.get('/', requirePermission('users.read'), (_req: Request, res: Response) 
     LEFT JOIN roles r ON r.id = ur.role_id
     GROUP BY u.id
     ORDER BY u.full_name
-  `).all();
-  res.json(users.map(u => ({ ...u, roles: (u as { roles: string }).roles?.split(',') || [] })));
+  `);
+  res.json(users.map((u) => ({ ...(u as Record<string, unknown>), roles: (u as { roles: string }).roles?.split(',') || [] })));
 });
 
-router.get('/:id', requirePermission('users.read'), (req: Request, res: Response) => {
-  const user = db.prepare(`
+router.get('/:id', requirePermission('users.read'), async (req: Request, res: Response) => {
+  const user = await queryOne(`
     SELECT u.id, u.email, u.full_name, u.is_active, u.created_at
     FROM users u WHERE u.id = ?
-  `).get(req.params.id);
+  `, req.params.id);
   if (!user) { res.status(404).json({ error: 'User not found' }); return; }
 
-  const roles = db.prepare(`
+  const roles = await queryAll(`
     SELECT r.id, r.name FROM roles r
     JOIN user_roles ur ON ur.role_id = r.id WHERE ur.user_id = ?
-  `).all(req.params.id);
+  `, req.params.id);
   res.json({ ...user, roles });
 });
 
-router.post('/', requirePermission('users.write'), blockViewerWrite, (req: Request, res: Response) => {
+router.post('/', requirePermission('users.write'), blockViewerWrite, async (req: Request, res: Response) => {
   const { email, password, fullName, roleIds } = req.body;
   if (!email || !password || !fullName) {
     res.status(400).json({ error: 'Email, password, and full name are required' });
@@ -45,74 +45,74 @@ router.post('/', requirePermission('users.write'), blockViewerWrite, (req: Reque
   }
 
   try {
-    assertEmailDomainAllowed(email);
+    await assertEmailDomainAllowed(email);
   } catch (err) {
     res.status(400).json({ error: (err as Error).message });
     return;
   }
 
   const normalizedEmail = String(email).trim().toLowerCase();
-  const existing = db.prepare('SELECT id FROM users WHERE lower(email) = ?').get(normalizedEmail);
+  const existing = await queryOne('SELECT id FROM users WHERE lower(email) = ?', normalizedEmail);
   if (existing) {
     res.status(400).json({ error: 'A user with this email already exists' });
     return;
   }
 
   const hash = bcrypt.hashSync(password, 10);
-  const result = db.prepare(`
+  const result = await queryRun(`
     INSERT INTO users (email, password_hash, full_name) VALUES (?, ?, ?)
-  `).run(normalizedEmail, hash, fullName);
+  `, normalizedEmail, hash, fullName);
   const userId = Number(result.lastInsertRowid);
 
   if (roleIds?.length) {
-    const insertRole = db.prepare('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)');
+
     for (const roleId of roleIds) {
-      const role = db.prepare('SELECT id FROM roles WHERE id = ?').get(roleId);
+      const role = await queryOne('SELECT id FROM roles WHERE id = ?', roleId);
       if (!role) {
         res.status(400).json({ error: `Invalid role ID: ${roleId}` });
         return;
       }
-      insertRole.run(userId, roleId);
+      await queryRun('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)', userId, roleId);
     }
   }
 
-  createAuditLog({ userId: req.user!.id, action: 'CREATE', entityType: 'user', entityId: userId, newValue: { email: normalizedEmail, fullName, roleIds } });
+  await createAuditLog({ userId: req.user!.id, action: 'CREATE', entityType: 'user', entityId: userId, newValue: { email: normalizedEmail, fullName, roleIds } });
   res.status(201).json({ id: userId, email: normalizedEmail, fullName });
 });
 
-router.put('/:id', requirePermission('users.write'), blockViewerWrite, (req: Request, res: Response) => {
+router.put('/:id', requirePermission('users.write'), blockViewerWrite, async (req: Request, res: Response) => {
   const { fullName, isActive, roleIds, password } = req.body;
   const userId = Number(req.params.id);
 
-  const existing = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  const existing = await queryOne('SELECT * FROM users WHERE id = ?', userId);
   if (!existing) { res.status(404).json({ error: 'User not found' }); return; }
 
   if (fullName !== undefined) {
-    db.prepare('UPDATE users SET full_name = ?, updated_at = datetime(\'now\') WHERE id = ?').run(fullName, userId);
+    await queryRun('UPDATE users SET full_name = ?, updated_at = datetime(\'now\') WHERE id = ?', fullName, userId);
   }
   if (isActive !== undefined) {
-    db.prepare('UPDATE users SET is_active = ?, updated_at = datetime(\'now\') WHERE id = ?').run(isActive ? 1 : 0, userId);
+    await queryRun('UPDATE users SET is_active = ?, updated_at = datetime(\'now\') WHERE id = ?', isActive ? 1 : 0, userId);
   }
   if (password) {
     const hash = bcrypt.hashSync(password, 10);
-    db.prepare('UPDATE users SET password_hash = ?, updated_at = datetime(\'now\') WHERE id = ?').run(hash, userId);
+    await queryRun('UPDATE users SET password_hash = ?, updated_at = datetime(\'now\') WHERE id = ?', hash, userId);
   }
   if (roleIds) {
     for (const roleId of roleIds) {
-      const role = db.prepare('SELECT id FROM roles WHERE id = ?').get(roleId);
+      const role = await queryOne('SELECT id FROM roles WHERE id = ?', roleId);
       if (!role) {
         res.status(400).json({ error: `Invalid role ID: ${roleId}` });
         return;
       }
     }
-    db.prepare('DELETE FROM user_roles WHERE user_id = ?').run(userId);
-    const insertRole = db.prepare('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)');
+    await queryRun('DELETE FROM user_roles WHERE user_id = ?', userId);
+
     for (const roleId of roleIds) {
-      insertRole.run(userId, roleId);
+      await queryRun('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)', userId, roleId);
     }
   }
 
-  createAuditLog({
+  await createAuditLog({
     userId: req.user!.id,
     action: 'UPDATE',
     entityType: 'user',

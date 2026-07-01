@@ -1,13 +1,13 @@
 import { Router, Request, Response } from 'express';
-import db from '../db';
 import { authenticate } from '../middleware/auth';
 import { requirePermission, blockViewerWrite } from '../middleware/rbac';
 import { enrichInvoice, markInvoicePaid, sendInvoice } from '../services/billing';
+import { queryOne, queryAll } from '../db/query';
 
 const router = Router();
 router.use(authenticate);
 
-router.get('/', requirePermission('invoices.read'), (req: Request, res: Response) => {
+router.get('/', requirePermission('invoices.read'), async (req: Request, res: Response) => {
   const { status, search } = req.query;
   let query = `
     SELECT i.*, o.order_number, c.name as customer_name
@@ -23,36 +23,36 @@ router.get('/', requirePermission('invoices.read'), (req: Request, res: Response
     params.push(`%${search}%`, `%${search}%`, `%${search}%`);
   }
   query += ' ORDER BY i.created_at DESC';
-  res.json(db.prepare(query).all(...params));
+  res.json(await queryAll(query, ...params));
 });
 
-router.get('/order/:orderId', requirePermission('invoices.read'), (req: Request, res: Response) => {
-  const invoice = db.prepare(`
+router.get('/order/:orderId', requirePermission('invoices.read'), async (req: Request, res: Response) => {
+  const invoice = await queryOne(`
     SELECT id FROM invoices WHERE order_id = ?
-  `).get(req.params.orderId) as { id: number } | undefined;
+  `, req.params.orderId) as { id: number } | undefined;
   if (!invoice) { res.status(404).json({ error: 'No invoice for this order' }); return; }
-  res.json(enrichInvoice(invoice.id));
+  res.json(await enrichInvoice(invoice.id));
 });
 
-router.get('/:id', requirePermission('invoices.read'), (req: Request, res: Response) => {
-  const invoice = enrichInvoice(Number(req.params.id));
+router.get('/:id', requirePermission('invoices.read'), async (req: Request, res: Response) => {
+  const invoice = await enrichInvoice(Number(req.params.id));
   if (!invoice) { res.status(404).json({ error: 'Invoice not found' }); return; }
   res.json(invoice);
 });
 
-router.post('/:id/send', requirePermission('invoices.write'), blockViewerWrite, (req: Request, res: Response) => {
+router.post('/:id/send', requirePermission('invoices.write'), blockViewerWrite, async (req: Request, res: Response) => {
   const id = Number(req.params.id);
-  const exists = db.prepare('SELECT id FROM invoices WHERE id = ?').get(id);
+  const exists = await queryOne('SELECT id FROM invoices WHERE id = ?', id);
   if (!exists) { res.status(404).json({ error: 'Invoice not found' }); return; }
-  sendInvoice(id, req.user!.id);
+  await sendInvoice(id, req.user!.id);
   res.json({ message: 'Invoice sent to customer' });
 });
 
-router.post('/:id/mark-paid', requirePermission('invoices.write'), blockViewerWrite, (req: Request, res: Response) => {
+router.post('/:id/mark-paid', requirePermission('invoices.write'), blockViewerWrite, async (req: Request, res: Response) => {
   const id = Number(req.params.id);
-  const exists = db.prepare('SELECT id FROM invoices WHERE id = ?').get(id);
+  const exists = await queryOne('SELECT id FROM invoices WHERE id = ?', id);
   if (!exists) { res.status(404).json({ error: 'Invoice not found' }); return; }
-  markInvoicePaid(id, req.user!.id);
+  await markInvoicePaid(id, req.user!.id);
   res.json({ message: 'Invoice marked as paid' });
 });
 

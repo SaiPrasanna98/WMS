@@ -1,13 +1,13 @@
 import { Router, Request, Response } from 'express';
-import db from '../db';
 import { authenticate } from '../middleware/auth';
 import { requirePermission } from '../middleware/rbac';
+import { queryAll } from '../db/query';
 
 const router = Router();
 
 router.use(authenticate);
 
-router.get('/', requirePermission('inventory.read'), (req: Request, res: Response) => {
+router.get('/', requirePermission('inventory.read'), async (req: Request, res: Response) => {
   const { type, productId, search } = req.query;
   let query = `
     SELECT it.*, p.sku, p.name as product_name,
@@ -39,7 +39,7 @@ router.get('/', requirePermission('inventory.read'), (req: Request, res: Respons
   }
   query += ' ORDER BY it.created_at DESC LIMIT 500';
 
-  res.json(db.prepare(query).all(...params));
+  res.json(await queryAll(query, ...params));
 });
 
 export default router;

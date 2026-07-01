@@ -1,7 +1,7 @@
-import db from '../db';
+import { queryOne, queryRun } from '../db/query';
 import { AuditAction } from '../types';
 
-export function createAuditLog(params: {
+export async function createAuditLog(params: {
   userId?: number;
   action: AuditAction;
   entityType: string;
@@ -9,11 +9,11 @@ export function createAuditLog(params: {
   oldValue?: unknown;
   newValue?: unknown;
   ipAddress?: string;
-}): void {
-  db.prepare(`
+}): Promise<void> {
+  await queryRun(`
     INSERT INTO audit_logs (user_id, action, entity_type, entity_id, old_value, new_value, ip_address)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  `,
     params.userId ?? null,
     params.action,
     params.entityType,
@@ -24,23 +24,23 @@ export function createAuditLog(params: {
   );
 }
 
-export function getProductInventory(productId: number): number {
-  const result = db.prepare(`
+export async function getProductInventory(productId: number): Promise<number> {
+  const result = await queryOne<{ total: number }>(`
     SELECT COALESCE(SUM(quantity), 0) as total
     FROM pallets
     WHERE product_id = ? AND status = 'ACTIVE'
-  `).get(productId) as { total: number };
-  return result.total;
+  `, productId);
+  return result?.total ?? 0;
 }
 
-export function ensureNonNegativeInventory(productId: number, quantityChange: number): void {
-  const current = getProductInventory(productId);
+export async function ensureNonNegativeInventory(productId: number, quantityChange: number): Promise<void> {
+  const current = await getProductInventory(productId);
   if (current + quantityChange < 0) {
     throw new Error('Inventory cannot go negative');
   }
 }
 
-export function createInventoryTransaction(params: {
+export async function createInventoryTransaction(params: {
   transactionType: string;
   productId: number;
   lotId?: number;
@@ -52,14 +52,14 @@ export function createInventoryTransaction(params: {
   referenceId?: number;
   performedBy: number;
   notes?: string;
-}): number {
-  const result = db.prepare(`
+}): Promise<number> {
+  const result = await queryRun(`
     INSERT INTO inventory_transactions (
       transaction_type, product_id, lot_id, pallet_id,
       from_location_id, to_location_id, quantity,
       reference_type, reference_id, performed_by, notes
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  `,
     params.transactionType,
     params.productId,
     params.lotId ?? null,

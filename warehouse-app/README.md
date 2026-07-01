@@ -48,7 +48,7 @@ A full-stack warehouse management system for fragrance and cosmetics manufacturi
 |-------|------------|
 | Frontend | React 18 + TypeScript + Vite |
 | Backend | Node.js + Express + TypeScript |
-| Database | SQLite (better-sqlite3) |
+| Database | SQLite (local) or **Neon Postgres** (cloud) via Drizzle ORM |
 | Authentication | JWT (jsonwebtoken) + bcrypt |
 | Authorization | Permission-based RBAC |
 
@@ -126,7 +126,32 @@ Backend config lives in `backend/.env` (included for local dev):
 PORT=3001
 JWT_SECRET=warehouse-jwt-secret-change-in-production
 JWT_EXPIRES_IN=8h
+
+# Local SQLite (default — omit DATABASE_URL)
 DATABASE_PATH=./data/warehouse.db
+
+# Neon Postgres — when set, SQLite is skipped (use pooled connection string)
+# DATABASE_URL=postgresql://USER:PASS@ep-xxx-pooler.us-east-2.aws.neon.tech/warehouse?sslmode=require
+```
+
+### Neon Postgres (cloud)
+
+1. Create a [Neon](https://neon.tech) project and database named `warehouse`
+2. Copy the **pooled** connection string from the Neon dashboard
+3. Add to `backend/.env`:
+   ```env
+   DATABASE_URL=postgresql://...@ep-xxx-pooler.neon.tech/warehouse?sslmode=require
+   ```
+4. Start the backend — schema and demo data are created automatically on first run
+5. Health check reports the active driver: `GET /api/health` → `"database": "postgres"`
+
+**Local vs cloud:** If `DATABASE_URL` is set, Postgres is used. If unset, SQLite file at `DATABASE_PATH` is used. Same codebase, no frontend changes.
+
+```bash
+# Optional: Drizzle Kit migrations
+cd warehouse-app/backend
+npm run db:generate   # generate migration from schema.ts
+npm run db:push       # push schema (dev)
 ```
 
 ### Troubleshooting
@@ -341,8 +366,8 @@ Schema and seed data are recreated on startup.
 ## Production Notes
 
 - Set a strong random `JWT_SECRET` (required when `NODE_ENV=production`)
+- Use **Neon Postgres** in production: set `DATABASE_URL` to the pooled connection string
 - Use environment variables for all secrets — never commit real credentials
-- Consider PostgreSQL instead of SQLite for multi-user production workloads
 - Enable HTTPS and configure `CORS_ORIGIN` to your frontend domain
 - Add rate limiting on authentication endpoints
 

@@ -1,62 +1,64 @@
+import fs from 'fs';
+import path from 'path';
+
+const TEST_DB = path.join(__dirname, '../../data/test-warehouse.db');
+if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+process.env.DATABASE_PATH = TEST_DB;
+
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import fs from 'fs';
-import path from 'path';
-import Database from 'better-sqlite3';
+import { initializeDatabase, closeConnections } from '../db';
+import { queryOne, queryAll, queryRun } from '../db/query';
 import { assertPositiveQuantity, assertValidTransition, SHIPMENT_TRANSITIONS } from '../services/validation';
 
-const TEST_DB = path.join(__dirname, '../../data/test-warehouse.db');
+async function setupTestData() {
+  await initializeDatabase();
 
-function setupTestDb() {
-  const dbDir = path.dirname(TEST_DB);
-  if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
-  if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
-  const db = new Database(TEST_DB);
-  db.pragma('foreign_keys = ON');
-  const schema = fs.readFileSync(path.join(__dirname, '../db/schema.sql'), 'utf-8');
-  db.exec(schema);
+  await queryRun(`INSERT INTO permissions (code, name, module) VALUES ('products.read', 'View Products', 'products')`);
+  await queryRun(`INSERT INTO permissions (code, name, module) VALUES ('products.write', 'Manage Products', 'products')`);
+  await queryRun(`INSERT INTO permissions (code, name, module) VALUES ('dashboard.read', 'View Dashboard', 'dashboard')`);
 
-  db.prepare(`INSERT INTO permissions (code, name, module) VALUES ('products.read', 'View Products', 'products')`).run();
-  db.prepare(`INSERT INTO permissions (code, name, module) VALUES ('products.write', 'Manage Products', 'products')`).run();
-  db.prepare(`INSERT INTO permissions (code, name, module) VALUES ('dashboard.read', 'View Dashboard', 'dashboard')`).run();
+  const adminRole = await queryRun(`INSERT INTO roles (name, description) VALUES ('Admin', 'Full access')`);
+  const viewerRole = await queryRun(`INSERT INTO roles (name, description) VALUES ('Viewer', 'Read only')`);
+  const adminRoleId = adminRole.lastInsertRowid;
+  const viewerRoleId = viewerRole.lastInsertRowid;
 
-  const adminRole = db.prepare(`INSERT INTO roles (name, description) VALUES ('Admin', 'Full access')`).run();
-  const viewerRole = db.prepare(`INSERT INTO roles (name, description) VALUES ('Viewer', 'Read only')`).run();
-
-  const perms = db.prepare('SELECT id, code FROM permissions').all() as { id: number; code: string }[];
+  const perms = await queryAll<{ id: number; code: string }>('SELECT id, code FROM permissions');
   for (const p of perms) {
-    db.prepare('INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)').run(Number(adminRole.lastInsertRowid), p.id);
+    await queryRun('INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)', adminRoleId, p.id);
     if (p.code.endsWith('.read')) {
-      db.prepare('INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)').run(Number(viewerRole.lastInsertRowid), p.id);
+      await queryRun('INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)', viewerRoleId, p.id);
     }
   }
 
   const hash = bcrypt.hashSync('password123', 10);
-  const adminUser = db.prepare(`INSERT INTO users (email, password_hash, full_name) VALUES ('admin@test.com', ?, 'Admin')`).run(hash);
-  const viewerUser = db.prepare(`INSERT INTO users (email, password_hash, full_name) VALUES ('viewer@test.com', ?, 'Viewer')`).run(hash);
+  const adminUser = await queryRun(
+    `INSERT INTO users (email, password_hash, full_name) VALUES ('admin@test.com', ?, 'Admin')`,
+    hash
+  );
+  const viewerUser = await queryRun(
+    `INSERT INTO users (email, password_hash, full_name) VALUES ('viewer@test.com', ?, 'Viewer')`,
+    hash
+  );
 
-  db.prepare('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)').run(Number(adminUser.lastInsertRowid), Number(adminRole.lastInsertRowid));
-  db.prepare('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)').run(Number(viewerUser.lastInsertRowid), Number(viewerRole.lastInsertRowid));
+  await queryRun('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)', adminUser.lastInsertRowid, adminRoleId);
+  await queryRun('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)', viewerUser.lastInsertRowid, viewerRoleId);
 
-  db.prepare(`
+  await queryRun(`
     INSERT INTO products (sku, name, product_type, unit_of_measure, reorder_level)
     VALUES ('RM-001', 'Test Material', 'RAW_MATERIAL', 'KG', 10)
-  `).run();
-
-  return db;
+  `);
 }
 
 describe('Warehouse Business Rules', () => {
-  let db: Database.Database;
-
-  before(() => {
-    db = setupTestDb();
+  before(async () => {
+    await setupTestData();
   });
 
-  after(() => {
-    db.close();
+  after(async () => {
+    await closeConnections();
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
   });
 
@@ -73,42 +75,45 @@ describe('Warehouse Business Rules', () => {
     assert.equal(payload.userId, 1);
   });
 
-  it('should assign correct permissions to admin vs viewer', () => {
-    const adminPerms = db.prepare(`
+  it('should assign correct permissions to admin vs viewer', async () => {
+    const adminPerms = await queryAll<{ code: string }>(`
       SELECT p.code FROM permissions p
       JOIN role_permissions rp ON rp.permission_id = p.id
       JOIN user_roles ur ON ur.role_id = rp.role_id
       JOIN users u ON u.id = ur.user_id
       WHERE u.email = 'admin@test.com'
-    `).all() as { code: string }[];
+    `);
 
-    const viewerPerms = db.prepare(`
+    const viewerPerms = await queryAll<{ code: string }>(`
       SELECT p.code FROM permissions p
       JOIN role_permissions rp ON rp.permission_id = p.id
       JOIN user_roles ur ON ur.role_id = rp.role_id
       JOIN users u ON u.id = ur.user_id
       WHERE u.email = 'viewer@test.com'
-    `).all() as { code: string }[];
+    `);
 
     assert.ok(adminPerms.some(p => p.code === 'products.write'));
     assert.ok(!viewerPerms.some(p => p.code === 'products.write'));
     assert.ok(viewerPerms.some(p => p.code === 'products.read'));
   });
 
-  it('should prevent negative inventory', () => {
-    const product = db.prepare('SELECT id FROM products WHERE sku = ?').get('RM-001') as { id: number };
-    db.prepare(`
+  it('should prevent negative inventory', async () => {
+    const product = await queryOne<{ id: number }>('SELECT id FROM products WHERE sku = ?', 'RM-001');
+    assert.ok(product);
+    await queryRun(`
       INSERT INTO lots (lot_number, product_id, quantity, qc_status) VALUES ('LOT-001', ?, 100, 'PASSED')
-    `).run(product.id);
-    const lot = db.prepare('SELECT id FROM lots WHERE lot_number = ?').get('LOT-001') as { id: number };
+    `, product.id);
+    const lot = await queryOne<{ id: number }>('SELECT id FROM lots WHERE lot_number = ?', 'LOT-001');
+    assert.ok(lot);
 
-    db.prepare(`
+    await queryRun(`
       INSERT INTO pallets (pallet_id, lot_id, product_id, quantity, status) VALUES ('PLT-001', ?, ?, 50, 'ACTIVE')
-    `).run(lot.id, product.id);
+    `, lot.id, product.id);
 
-    const current = db.prepare(`
+    const current = await queryOne<{ total: number }>(`
       SELECT COALESCE(SUM(quantity), 0) as total FROM pallets WHERE product_id = ? AND status = 'ACTIVE'
-    `).get(product.id) as { total: number };
+    `, product.id);
+    assert.ok(current);
 
     assert.equal(current.total, 50);
     assert.throws(() => {
@@ -116,36 +121,47 @@ describe('Warehouse Business Rules', () => {
     }, /Inventory cannot go negative/);
   });
 
-  it('should enforce QC-passed requirement for finished goods shipping', () => {
-    db.prepare(`
+  it('should enforce QC-passed requirement for finished goods shipping', async () => {
+    await queryRun(`
       INSERT INTO products (sku, name, product_type, unit_of_measure, reorder_level)
       VALUES ('FG-001', 'Test Perfume', 'FINISHED_GOOD', 'EA', 10)
-    `).run();
-    const fg = db.prepare('SELECT id FROM products WHERE sku = ?').get('FG-001') as { id: number };
+    `);
+    const fg = await queryOne<{ id: number }>('SELECT id FROM products WHERE sku = ?', 'FG-001');
+    assert.ok(fg);
 
-    db.prepare(`
+    await queryRun(`
       INSERT INTO lots (lot_number, product_id, quantity, qc_status) VALUES ('LOT-FG-001', ?, 100, 'PENDING')
-    `).run(fg.id);
-    const lot = db.prepare('SELECT id, qc_status FROM lots WHERE lot_number = ?').get('LOT-FG-001') as { id: number; qc_status: string };
+    `, fg.id);
+    const lot = await queryOne<{ id: number; qc_status: string }>(
+      'SELECT id, qc_status FROM lots WHERE lot_number = ?',
+      'LOT-FG-001'
+    );
+    assert.ok(lot);
 
     const productType = 'FINISHED_GOOD';
     const canShip = !(productType === 'FINISHED_GOOD' && lot.qc_status !== 'PASSED');
     assert.equal(canShip, false);
 
-    db.prepare(`UPDATE lots SET qc_status = 'PASSED' WHERE id = ?`).run(lot.id);
-    const updated = db.prepare('SELECT qc_status FROM lots WHERE id = ?').get(lot.id) as { qc_status: string };
+    await queryRun(`UPDATE lots SET qc_status = 'PASSED' WHERE id = ?`, lot.id);
+    const updated = await queryOne<{ qc_status: string }>('SELECT qc_status FROM lots WHERE id = ?', lot.id);
+    assert.ok(updated);
     const canShipNow = !(productType === 'FINISHED_GOOD' && updated.qc_status !== 'PASSED');
     assert.equal(canShipNow, true);
   });
 
-  it('should create audit log entries', () => {
-    const user = db.prepare('SELECT id FROM users WHERE email = ?').get('admin@test.com') as { id: number };
-    db.prepare(`
+  it('should create audit log entries', async () => {
+    const user = await queryOne<{ id: number }>('SELECT id FROM users WHERE email = ?', 'admin@test.com');
+    assert.ok(user);
+    await queryRun(`
       INSERT INTO audit_logs (user_id, action, entity_type, entity_id, new_value)
       VALUES (?, 'CREATE', 'product', 1, '{"sku":"TEST"}')
-    `).run(user.id);
+    `, user.id);
 
-    const log = db.prepare('SELECT * FROM audit_logs WHERE entity_type = ?').get('product') as { action: string; user_id: number };
+    const log = await queryOne<{ action: string; user_id: number }>(
+      'SELECT * FROM audit_logs WHERE entity_type = ?',
+      'product'
+    );
+    assert.ok(log);
     assert.equal(log.action, 'CREATE');
     assert.equal(log.user_id, user.id);
   });

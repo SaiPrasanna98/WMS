@@ -1,5 +1,6 @@
 import bcrypt from 'bcryptjs';
-import db from './index';
+import { sqlDateOffset } from './dialect';
+import { isPostgres, queryAll, queryOne, queryRun, sqlNow } from './query';
 
 const PERMISSIONS = [
   { code: 'users.read', name: 'View Users', module: 'users' },
@@ -131,56 +132,93 @@ const DEMO_USERS = [
   { email: 'sales@demo.com', password: 'password123', fullName: 'Sales Representative', role: 'Sales' },
 ];
 
-/** Inserts missing permissions and roles for existing databases. */
-export function syncSchemaData(): void {
-  const insertPerm = db.prepare('INSERT OR IGNORE INTO permissions (code, name, module) VALUES (?, ?, ?)');
-  for (const p of PERMISSIONS) {
-    insertPerm.run(p.code, p.name, p.module);
-  }
-  const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description) VALUES (?, ?)');
-  for (const r of ROLES) {
-    insertRole.run(r.name, r.description);
-  }
-  syncRolePermissions();
-
-  const driverUser = db.prepare('SELECT id FROM users WHERE email = ?').get('driver@demo.com') as { id: number } | undefined;
-  if (!driverUser) {
-    const hash = bcrypt.hashSync('password123', 10);
-    const result = db.prepare('INSERT INTO users (email, password_hash, full_name) VALUES (?, ?, ?)')
-      .run('driver@demo.com', hash, 'Delivery Driver');
-    const userId = Number(result.lastInsertRowid);
-    const role = db.prepare('SELECT id FROM roles WHERE name = ?').get('Driver') as { id: number } | undefined;
-    if (role) {
-      db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)').run(userId, role.id);
-    }
-    db.prepare('INSERT OR IGNORE INTO drivers (user_id, license_number, phone) VALUES (?, ?, ?)')
-      .run(userId, 'DL-DEMO-001', '555-0100');
-  } else {
-    const hasDriver = db.prepare('SELECT id FROM drivers WHERE user_id = ?').get(driverUser.id);
-    if (!hasDriver) {
-      db.prepare('INSERT INTO drivers (user_id, license_number, phone) VALUES (?, ?, ?)')
-        .run(driverUser.id, 'DL-DEMO-001', '555-0100');
-    }
-  }
-
-  const salesUser = db.prepare('SELECT id FROM users WHERE email = ?').get('sales@demo.com') as { id: number } | undefined;
-  if (!salesUser) {
-    const hash = bcrypt.hashSync('password123', 10);
-    const result = db.prepare('INSERT INTO users (email, password_hash, full_name) VALUES (?, ?, ?)')
-      .run('sales@demo.com', hash, 'Sales Representative');
-    const userId = Number(result.lastInsertRowid);
-    const role = db.prepare('SELECT id FROM roles WHERE name = ?').get('Sales') as { id: number } | undefined;
-    if (role) {
-      db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)').run(userId, role.id);
-    }
-  }
-
-  syncDemoCustomers();
+function sqlToday(): string {
+  return isPostgres() ? 'CURRENT_DATE::text' : "date('now')";
 }
 
-function syncDemoCustomers(): void {
-  const count = db.prepare('SELECT COUNT(*) as c FROM customers').get() as { c: number };
-  if (count.c > 0) return;
+function permissionInsertIgnoreSql(): string {
+  return isPostgres()
+    ? 'INSERT INTO permissions (code, name, module) VALUES (?, ?, ?) ON CONFLICT (code) DO NOTHING'
+    : 'INSERT OR IGNORE INTO permissions (code, name, module) VALUES (?, ?, ?)';
+}
+
+function roleInsertIgnoreSql(): string {
+  return isPostgres()
+    ? 'INSERT INTO roles (name, description) VALUES (?, ?) ON CONFLICT (name) DO NOTHING'
+    : 'INSERT OR IGNORE INTO roles (name, description) VALUES (?, ?)';
+}
+
+function userRoleInsertIgnoreSql(): string {
+  return isPostgres()
+    ? 'INSERT INTO user_roles (user_id, role_id) VALUES (?, ?) ON CONFLICT DO NOTHING'
+    : 'INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)';
+}
+
+function driverInsertIgnoreSql(): string {
+  return isPostgres()
+    ? 'INSERT INTO drivers (user_id, license_number, phone) VALUES (?, ?, ?) ON CONFLICT (user_id) DO NOTHING'
+    : 'INSERT OR IGNORE INTO drivers (user_id, license_number, phone) VALUES (?, ?, ?)';
+}
+
+/** Inserts missing permissions and roles for existing databases. */
+export async function syncSchemaData(): Promise<void> {
+  for (const p of PERMISSIONS) {
+    await queryRun(permissionInsertIgnoreSql(), p.code, p.name, p.module);
+  }
+  for (const r of ROLES) {
+    await queryRun(roleInsertIgnoreSql(), r.name, r.description);
+  }
+  await syncRolePermissions();
+
+  const driverUser = await queryOne<{ id: number }>('SELECT id FROM users WHERE email = ?', 'driver@demo.com');
+  if (!driverUser) {
+    const hash = bcrypt.hashSync('password123', 10);
+    const result = await queryRun(
+      'INSERT INTO users (email, password_hash, full_name) VALUES (?, ?, ?)',
+      'driver@demo.com',
+      hash,
+      'Delivery Driver'
+    );
+    const userId = Number(result.lastInsertRowid);
+    const role = await queryOne<{ id: number }>('SELECT id FROM roles WHERE name = ?', 'Driver');
+    if (role) {
+      await queryRun(userRoleInsertIgnoreSql(), userId, role.id);
+    }
+    await queryRun(driverInsertIgnoreSql(), userId, 'DL-DEMO-001', '555-0100');
+  } else {
+    const hasDriver = await queryOne('SELECT id FROM drivers WHERE user_id = ?', driverUser.id);
+    if (!hasDriver) {
+      await queryRun(
+        'INSERT INTO drivers (user_id, license_number, phone) VALUES (?, ?, ?)',
+        driverUser.id,
+        'DL-DEMO-001',
+        '555-0100'
+      );
+    }
+  }
+
+  const salesUser = await queryOne<{ id: number }>('SELECT id FROM users WHERE email = ?', 'sales@demo.com');
+  if (!salesUser) {
+    const hash = bcrypt.hashSync('password123', 10);
+    const result = await queryRun(
+      'INSERT INTO users (email, password_hash, full_name) VALUES (?, ?, ?)',
+      'sales@demo.com',
+      hash,
+      'Sales Representative'
+    );
+    const userId = Number(result.lastInsertRowid);
+    const role = await queryOne<{ id: number }>('SELECT id FROM roles WHERE name = ?', 'Sales');
+    if (role) {
+      await queryRun(userRoleInsertIgnoreSql(), userId, role.id);
+    }
+  }
+
+  await syncDemoCustomers();
+}
+
+async function syncDemoCustomers(): Promise<void> {
+  const count = await queryOne<{ c: number }>('SELECT COUNT(*) as c FROM customers');
+  if ((count?.c ?? 0) > 0) return;
 
   const demoCustomers = [
     {
@@ -204,85 +242,92 @@ function syncDemoCustomers(): void {
   ];
 
   for (const c of demoCustomers) {
-    const result = db.prepare('INSERT INTO customers (name, email, phone) VALUES (?, ?, ?)').run(c.name, c.email, c.phone);
+    const result = await queryRun(
+      'INSERT INTO customers (name, email, phone) VALUES (?, ?, ?)',
+      c.name,
+      c.email,
+      c.phone
+    );
     const customerId = Number(result.lastInsertRowid);
-    db.prepare(`
+    await queryRun(`
       INSERT INTO customer_addresses (customer_id, label, line1, city, state, postal_code, country, is_default)
       VALUES (?, 'Primary', ?, ?, ?, ?, 'US', 1)
-    `).run(customerId, c.address.line1, c.address.city, c.address.state, c.address.postalCode);
+    `, customerId, c.address.line1, c.address.city, c.address.state, c.address.postalCode);
   }
 }
 
 /** Keeps role permissions in sync when new permissions are added (existing databases). */
-export function syncRolePermissions(): void {
-  const getPermId = db.prepare('SELECT id FROM permissions WHERE code = ?');
-  const getRoleId = db.prepare('SELECT id FROM roles WHERE name = ?');
-  const hasRolePerm = db.prepare('SELECT 1 FROM role_permissions WHERE role_id = ? AND permission_id = ?');
-  const insertRolePerm = db.prepare('INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)');
-
+export async function syncRolePermissions(): Promise<void> {
   for (const [roleName, perms] of Object.entries(ROLE_PERMISSIONS)) {
-    const role = getRoleId.get(roleName) as { id: number } | undefined;
+    const role = await queryOne<{ id: number }>('SELECT id FROM roles WHERE name = ?', roleName);
     if (!role) continue;
     for (const permCode of perms) {
-      const perm = getPermId.get(permCode) as { id: number } | undefined;
-      if (!perm || hasRolePerm.get(role.id, perm.id)) continue;
-      insertRolePerm.run(role.id, perm.id);
+      const perm = await queryOne<{ id: number }>('SELECT id FROM permissions WHERE code = ?', permCode);
+      if (!perm) continue;
+      const exists = await queryOne(
+        'SELECT 1 FROM role_permissions WHERE role_id = ? AND permission_id = ?',
+        role.id,
+        perm.id
+      );
+      if (exists) continue;
+      await queryRun(
+        'INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)',
+        role.id,
+        perm.id
+      );
     }
   }
 }
 
-export function seedDatabase(): void {
-  const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
-  if (userCount.count > 0) {
-    syncSchemaData();
+export async function seedDatabase(): Promise<void> {
+  const userCount = (await queryOne<{ count: number }>('SELECT COUNT(*) as count FROM users'))?.count ?? 0;
+
+  for (const p of PERMISSIONS) {
+    await queryRun(permissionInsertIgnoreSql(), p.code, p.name, p.module);
+  }
+  for (const r of ROLES) {
+    await queryRun(roleInsertIgnoreSql(), r.name, r.description);
+  }
+  await syncRolePermissions();
+
+  if (userCount > 0) {
+    await syncSchemaData();
     return;
   }
 
-  const insertPerm = db.prepare('INSERT INTO permissions (code, name, module) VALUES (?, ?, ?)');
-  for (const p of PERMISSIONS) {
-    insertPerm.run(p.code, p.name, p.module);
-  }
+  for (const u of DEMO_USERS) {
+    const existing = await queryOne<{ id: number }>('SELECT id FROM users WHERE email = ?', u.email);
+    if (existing) continue;
 
-  const insertRole = db.prepare('INSERT INTO roles (name, description) VALUES (?, ?)');
-  for (const r of ROLES) {
-    insertRole.run(r.name, r.description);
-  }
-
-  const getPermId = db.prepare('SELECT id FROM permissions WHERE code = ?');
-  const getRoleId = db.prepare('SELECT id FROM roles WHERE name = ?');
-  const insertRolePerm = db.prepare('INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)');
-
-  for (const [roleName, perms] of Object.entries(ROLE_PERMISSIONS)) {
-    const role = getRoleId.get(roleName) as { id: number };
-    for (const permCode of perms) {
-      const perm = getPermId.get(permCode) as { id: number };
-      insertRolePerm.run(role.id, perm.id);
+    const hash = bcrypt.hashSync(u.password, 10);
+    const result = await queryRun(
+      'INSERT INTO users (email, password_hash, full_name) VALUES (?, ?, ?)',
+      u.email,
+      hash,
+      u.fullName
+    );
+    const userId = Number(result.lastInsertRowid);
+    const role = await queryOne<{ id: number }>('SELECT id FROM roles WHERE name = ?', u.role);
+    if (role) {
+      await queryRun(userRoleInsertIgnoreSql(), userId, role.id);
     }
   }
 
-  const insertUser = db.prepare('INSERT INTO users (email, password_hash, full_name) VALUES (?, ?, ?)');
-  const insertUserRole = db.prepare('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)');
-
-  for (const u of DEMO_USERS) {
-    const hash = bcrypt.hashSync(u.password, 10);
-    const result = insertUser.run(u.email, hash, u.fullName);
-    const userId = Number(result.lastInsertRowid);
-    const role = getRoleId.get(u.role) as { id: number };
-    insertUserRole.run(userId, role.id);
-  }
-
-  seedProducts();
-  seedLocations();
-  seedLotsAndPallets();
-  seedPurchaseOrders();
-  seedProductionOrders();
-  seedShipments();
-  seedInventoryTransactions();
-  seedFulfillment();
-  syncSchemaData();
+  await seedProducts();
+  await seedLocations();
+  await seedLotsAndPallets();
+  await seedPurchaseOrders();
+  await seedProductionOrders();
+  await seedShipments();
+  await seedInventoryTransactions();
+  await seedFulfillment();
+  await syncSchemaData();
 }
 
-function seedProducts(): void {
+async function seedProducts(): Promise<void> {
+  const existing = await queryOne<{ c: number }>('SELECT COUNT(*) as c FROM products');
+  if ((existing?.c ?? 0) > 0) return;
+
   const products = [
     { sku: 'RM-001', name: 'Ethanol 96%', type: 'RAW_MATERIAL', uom: 'L', reorder: 500 },
     { sku: 'RM-002', name: 'Fragrance Oil - Rose', type: 'RAW_MATERIAL', uom: 'KG', reorder: 50 },
@@ -296,29 +341,29 @@ function seedProducts(): void {
     { sku: 'FG-005', name: 'Floral Gift Set', type: 'FINISHED_GOOD', uom: 'EA', reorder: 100 },
   ];
 
-  const insert = db.prepare(`
-    INSERT INTO products (sku, name, product_type, unit_of_measure, reorder_level, description)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
-
   for (const p of products) {
-    insert.run(p.sku, p.name, p.type, p.uom, p.reorder, `${p.name} - demo product`);
+    await queryRun(`
+      INSERT INTO products (sku, name, product_type, unit_of_measure, reorder_level, description)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `, p.sku, p.name, p.type, p.uom, p.reorder, `${p.name} - demo product`);
   }
 }
 
-function seedLocations(): void {
+async function seedLocations(): Promise<void> {
+  const existing = await queryOne<{ c: number }>('SELECT COUNT(*) as c FROM warehouse_locations');
+  if ((existing?.c ?? 0) > 0) return;
+
   const zones = ['A', 'B', 'C', 'D'];
   const types = ['STORAGE', 'STAGING', 'PRODUCTION', 'SHIPPING', 'QC'] as const;
-  const insert = db.prepare(`
-    INSERT INTO warehouse_locations (code, zone, aisle, rack, shelf, location_type)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
 
   let count = 0;
   for (const zone of zones) {
     for (let aisle = 1; aisle <= 5 && count < 20; aisle++) {
       const type = types[count % types.length];
-      insert.run(
+      await queryRun(`
+        INSERT INTO warehouse_locations (code, zone, aisle, rack, shelf, location_type)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `,
         `${zone}-${String(aisle).padStart(2, '0')}-01`,
         zone,
         String(aisle),
@@ -331,11 +376,17 @@ function seedLocations(): void {
   }
 }
 
-function seedLotsAndPallets(): void {
-  const products = db.prepare('SELECT id, sku, product_type FROM products').all() as {
-    id: number; sku: string; product_type: string;
-  }[];
-  const locations = db.prepare('SELECT id FROM warehouse_locations WHERE location_type = ?').all('STORAGE') as { id: number }[];
+async function seedLotsAndPallets(): Promise<void> {
+  const existing = await queryOne<{ c: number }>('SELECT COUNT(*) as c FROM lots');
+  if ((existing?.c ?? 0) > 0) return;
+
+  const products = await queryAll<{ id: number; sku: string; product_type: string }>(
+    'SELECT id, sku, product_type FROM products'
+  );
+  const locations = await queryAll<{ id: number }>(
+    'SELECT id FROM warehouse_locations WHERE location_type = ?',
+    'STORAGE'
+  );
 
   const lotData = [
     { lot: 'LOT-2024-001', productIdx: 0, qty: 1000, qc: 'PASSED' },
@@ -345,19 +396,13 @@ function seedLotsAndPallets(): void {
     { lot: 'LOT-2024-005', productIdx: 2, qty: 150, qc: 'PENDING' },
   ];
 
-  const insertLot = db.prepare(`
-    INSERT INTO lots (lot_number, product_id, quantity, qc_status, received_date)
-    VALUES (?, ?, ?, ?, date('now'))
-  `);
-  const insertPallet = db.prepare(`
-    INSERT INTO pallets (pallet_id, lot_id, product_id, quantity, location_id, status)
-    VALUES (?, ?, ?, ?, ?, 'ACTIVE')
-  `);
-
   let palletNum = 1;
   for (const l of lotData) {
     const product = products[l.productIdx];
-    const lotResult = insertLot.run(l.lot, product.id, l.qty, l.qc);
+    const lotResult = await queryRun(`
+      INSERT INTO lots (lot_number, product_id, quantity, qc_status, received_date)
+      VALUES (?, ?, ?, ?, ${sqlToday()})
+    `, l.lot, product.id, l.qty, l.qc);
     const lotId = Number(lotResult.lastInsertRowid);
 
     const numPallets = l.productIdx < 5 ? 2 : 1;
@@ -365,7 +410,10 @@ function seedLotsAndPallets(): void {
 
     for (let i = 0; i < numPallets && palletNum <= 10; i++) {
       const loc = locations[(palletNum - 1) % locations.length];
-      insertPallet.run(
+      await queryRun(`
+        INSERT INTO pallets (pallet_id, lot_id, product_id, quantity, location_id, status)
+        VALUES (?, ?, ?, ?, ?, 'ACTIVE')
+      `,
         `PLT-${String(palletNum).padStart(4, '0')}`,
         lotId,
         product.id,
@@ -377,197 +425,307 @@ function seedLotsAndPallets(): void {
   }
 
   // Demo empty pallet on upper shelf — use Relocate to move to lower location
-  const topLoc = db.prepare(`
+  const topLoc = await queryOne<{ id: number }>(`
     SELECT id FROM warehouse_locations WHERE shelf = '01' AND location_type = 'STORAGE' LIMIT 1
-  `).get() as { id: number } | undefined;
+  `);
   if (topLoc && products[0]) {
-    const lot = db.prepare('SELECT id FROM lots WHERE lot_number = ?').get('LOT-2024-001') as { id: number };
-    insertPallet.run('PLT-EMPTY-01', lot.id, products[0].id, 0, topLoc.id);
-    db.prepare(`UPDATE pallets SET status = 'DEPLETED' WHERE pallet_id = 'PLT-EMPTY-01'`).run();
+    const lot = await queryOne<{ id: number }>('SELECT id FROM lots WHERE lot_number = ?', 'LOT-2024-001');
+    if (lot) {
+      await queryRun(`
+        INSERT INTO pallets (pallet_id, lot_id, product_id, quantity, location_id, status)
+        VALUES (?, ?, ?, ?, ?, 'ACTIVE')
+      `, 'PLT-EMPTY-01', lot.id, products[0].id, 0, topLoc.id);
+      await queryRun(`UPDATE pallets SET status = 'DEPLETED' WHERE pallet_id = 'PLT-EMPTY-01'`);
+    }
   }
 }
 
-function seedPurchaseOrders(): void {
-  const admin = db.prepare('SELECT id FROM users WHERE email = ?').get('admin@demo.com') as { id: number } | undefined;
-  const rm = db.prepare('SELECT id FROM products WHERE sku = ?').get('RM-001') as { id: number } | undefined;
+async function seedPurchaseOrders(): Promise<void> {
+  const existing = await queryOne<{ c: number }>('SELECT COUNT(*) as c FROM purchase_orders');
+  if ((existing?.c ?? 0) > 0) return;
 
-  const po1 = db.prepare(`
+  const admin = await queryOne<{ id: number }>('SELECT id FROM users WHERE email = ?', 'admin@demo.com');
+  const rm = await queryOne<{ id: number }>('SELECT id FROM products WHERE sku = ?', 'RM-001');
+
+  const po1 = await queryRun(`
     INSERT INTO purchase_orders (po_number, supplier_name, status, expected_date, created_by)
-    VALUES ('PO-2024-001', 'ChemSupply Inc', 'RECEIVED', date('now', '+7 days'), ?)
-  `).run(admin?.id ?? 1);
-  const po2 = db.prepare(`
+    VALUES ('PO-2024-001', 'ChemSupply Inc', 'RECEIVED', ${sqlDateOffset('+7 days')}, ?)
+  `, admin?.id ?? 1);
+  const po2 = await queryRun(`
     INSERT INTO purchase_orders (po_number, supplier_name, status, expected_date, created_by)
-    VALUES ('PO-2024-002', 'Fragrance World Ltd', 'OPEN', date('now', '+14 days'), ?)
-  `).run(admin?.id ?? 1);
+    VALUES ('PO-2024-002', 'Fragrance World Ltd', 'OPEN', ${sqlDateOffset('+14 days')}, ?)
+  `, admin?.id ?? 1);
 
   if (rm) {
-    db.prepare(`
+    await queryRun(`
       INSERT INTO purchase_order_items (purchase_order_id, product_id, quantity_ordered, quantity_received, unit_cost)
       VALUES (?, ?, 500, 500, 12.5)
-    `).run(Number(po1.lastInsertRowid), rm.id);
-    db.prepare(`
+    `, Number(po1.lastInsertRowid), rm.id);
+    await queryRun(`
       INSERT INTO purchase_order_items (purchase_order_id, product_id, quantity_ordered, quantity_received, unit_cost)
       VALUES (?, ?, 1000, 0, 11.75)
-    `).run(Number(po2.lastInsertRowid), rm.id);
+    `, Number(po2.lastInsertRowid), rm.id);
   }
 }
 
-function seedProductionOrders(): void {
-  const admin = db.prepare('SELECT id FROM users WHERE email = ?').get('production@demo.com') as { id: number };
-  const fgProduct = db.prepare('SELECT id FROM products WHERE sku = ?').get('FG-001') as { id: number };
-  const lot = db.prepare('SELECT id FROM lots WHERE lot_number = ?').get('LOT-2024-003') as { id: number };
+async function seedProductionOrders(): Promise<void> {
+  const existing = await queryOne<{ c: number }>('SELECT COUNT(*) as c FROM production_orders');
+  if ((existing?.c ?? 0) > 0) return;
 
-  const insertPO = db.prepare(`
+  const admin = await queryOne<{ id: number }>('SELECT id FROM users WHERE email = ?', 'production@demo.com');
+  const fgProduct = await queryOne<{ id: number }>('SELECT id FROM products WHERE sku = ?', 'FG-001');
+  const lot = await queryOne<{ id: number }>('SELECT id FROM lots WHERE lot_number = ?', 'LOT-2024-003');
+
+  if (!admin || !fgProduct || !lot) return;
+
+  await queryRun(`
     INSERT INTO production_orders (order_number, product_id, quantity_planned, quantity_produced, status, lot_id, scheduled_date, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, date('now', '+3 days'), ?)
-  `);
+    VALUES (?, ?, ?, ?, ?, ?, ${sqlDateOffset('+3 days')}, ?)
+  `, 'PRO-2024-001', fgProduct.id, 500, 0, 'CREATED', null, admin.id);
+  await queryRun(`
+    INSERT INTO production_orders (order_number, product_id, quantity_planned, quantity_produced, status, lot_id, scheduled_date, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ${sqlDateOffset('+3 days')}, ?)
+  `, 'PRO-2024-002', fgProduct.id, 300, 150, 'IN_PROGRESS', null, admin.id);
+  await queryRun(`
+    INSERT INTO production_orders (order_number, product_id, quantity_planned, quantity_produced, status, lot_id, scheduled_date, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ${sqlDateOffset('+3 days')}, ?)
+  `, 'PRO-2024-003', fgProduct.id, 200, 200, 'QC_PENDING', lot.id, admin.id);
 
-  insertPO.run('PRO-2024-001', fgProduct.id, 500, 0, 'CREATED', null, admin.id);
-  insertPO.run('PRO-2024-002', fgProduct.id, 300, 150, 'IN_PROGRESS', null, admin.id);
-  insertPO.run('PRO-2024-003', fgProduct.id, 200, 200, 'QC_PENDING', lot.id, admin.id);
+  const rmProducts = await queryAll<{ id: number }>(
+    `SELECT id FROM products WHERE product_type = 'RAW_MATERIAL' LIMIT 3`
+  );
+  const po1 = await queryOne<{ id: number }>(
+    'SELECT id FROM production_orders WHERE order_number = ?',
+    'PRO-2024-001'
+  );
+  if (!po1 || rmProducts.length < 2) return;
 
-  const rmProducts = db.prepare(`SELECT id FROM products WHERE product_type = 'RAW_MATERIAL' LIMIT 3`).all() as { id: number }[];
-  const po1 = db.prepare('SELECT id FROM production_orders WHERE order_number = ?').get('PRO-2024-001') as { id: number };
-  const insertMat = db.prepare(`
+  await queryRun(`
     INSERT INTO production_materials (production_order_id, product_id, quantity_required, status)
     VALUES (?, ?, ?, 'REQUESTED')
-  `);
-  insertMat.run(po1.id, rmProducts[0].id, 50);
-  insertMat.run(po1.id, rmProducts[1].id, 10);
+  `, po1.id, rmProducts[0].id, 50);
+  await queryRun(`
+    INSERT INTO production_materials (production_order_id, product_id, quantity_required, status)
+    VALUES (?, ?, ?, 'REQUESTED')
+  `, po1.id, rmProducts[1].id, 10);
 }
 
-function seedShipments(): void {
-  const shippingUser = db.prepare('SELECT id FROM users WHERE email = ?').get('shipping@demo.com') as { id: number };
-  const fgProduct = db.prepare('SELECT id FROM products WHERE sku = ?').get('FG-001') as { id: number };
-  const passedLot = db.prepare('SELECT id FROM lots WHERE qc_status = ? LIMIT 1').get('PASSED') as { id: number };
+async function seedShipments(): Promise<void> {
+  const existing = await queryOne<{ c: number }>('SELECT COUNT(*) as c FROM shipments');
+  if ((existing?.c ?? 0) > 0) return;
 
-  const insertShip = db.prepare(`
+  const shippingUser = await queryOne<{ id: number }>('SELECT id FROM users WHERE email = ?', 'shipping@demo.com');
+  const fgProduct = await queryOne<{ id: number }>('SELECT id FROM products WHERE sku = ?', 'FG-001');
+  const passedLot = await queryOne<{ id: number }>(
+    'SELECT id FROM lots WHERE qc_status = ? LIMIT 1',
+    'PASSED'
+  );
+
+  if (!shippingUser || !fgProduct || !passedLot) return;
+
+  const s1 = await queryRun(`
     INSERT INTO shipments (shipment_number, customer_name, status, created_by)
     VALUES (?, ?, ?, ?)
-  `);
-  const insertItem = db.prepare(`
+  `, 'SHP-2024-001', 'Luxury Retail Co', 'DRAFT', shippingUser.id);
+  await queryRun(`
     INSERT INTO shipment_items (shipment_id, product_id, lot_id, quantity)
     VALUES (?, ?, ?, ?)
-  `);
+  `, Number(s1.lastInsertRowid), fgProduct.id, passedLot.id, 100);
 
-  const s1 = insertShip.run('SHP-2024-001', 'Luxury Retail Co', 'DRAFT', shippingUser.id);
-  insertItem.run(Number(s1.lastInsertRowid), fgProduct.id, passedLot.id, 100);
+  const s2 = await queryRun(`
+    INSERT INTO shipments (shipment_number, customer_name, status, created_by)
+    VALUES (?, ?, ?, ?)
+  `, 'SHP-2024-002', 'Beauty Boutique', 'PICKING', shippingUser.id);
+  await queryRun(`
+    INSERT INTO shipment_items (shipment_id, product_id, lot_id, quantity)
+    VALUES (?, ?, ?, ?)
+  `, Number(s2.lastInsertRowid), fgProduct.id, passedLot.id, 50);
 
-  const s2 = insertShip.run('SHP-2024-002', 'Beauty Boutique', 'PICKING', shippingUser.id);
-  insertItem.run(Number(s2.lastInsertRowid), fgProduct.id, passedLot.id, 50);
-
-  const s3 = insertShip.run('SHP-2024-003', 'Online Store Direct', 'PACKED', shippingUser.id);
-  insertItem.run(Number(s3.lastInsertRowid), fgProduct.id, passedLot.id, 75);
+  const s3 = await queryRun(`
+    INSERT INTO shipments (shipment_number, customer_name, status, created_by)
+    VALUES (?, ?, ?, ?)
+  `, 'SHP-2024-003', 'Online Store Direct', 'PACKED', shippingUser.id);
+  await queryRun(`
+    INSERT INTO shipment_items (shipment_id, product_id, lot_id, quantity)
+    VALUES (?, ?, ?, ?)
+  `, Number(s3.lastInsertRowid), fgProduct.id, passedLot.id, 75);
 }
 
-function seedInventoryTransactions(): void {
-  const receiver = db.prepare('SELECT id FROM users WHERE email = ?').get('receiver@demo.com') as { id: number };
-  const worker = db.prepare('SELECT id FROM users WHERE email = ?').get('worker@demo.com') as { id: number };
-  const products = db.prepare('SELECT id FROM products LIMIT 3').all() as { id: number }[];
-  const lots = db.prepare('SELECT id FROM lots LIMIT 3').all() as { id: number }[];
-  const pallets = db.prepare('SELECT id, location_id FROM pallets LIMIT 3').all() as { id: number; location_id: number }[];
-  const locations = db.prepare('SELECT id FROM warehouse_locations LIMIT 5').all() as { id: number }[];
+async function seedInventoryTransactions(): Promise<void> {
+  const existing = await queryOne<{ c: number }>('SELECT COUNT(*) as c FROM inventory_transactions');
+  if ((existing?.c ?? 0) > 0) return;
 
-  const insert = db.prepare(`
+  const receiver = await queryOne<{ id: number }>('SELECT id FROM users WHERE email = ?', 'receiver@demo.com');
+  const worker = await queryOne<{ id: number }>('SELECT id FROM users WHERE email = ?', 'worker@demo.com');
+  const products = await queryAll<{ id: number }>('SELECT id FROM products LIMIT 3');
+  const lots = await queryAll<{ id: number }>('SELECT id FROM lots LIMIT 3');
+  const pallets = await queryAll<{ id: number; location_id: number }>(
+    'SELECT id, location_id FROM pallets LIMIT 3'
+  );
+  const locations = await queryAll<{ id: number }>('SELECT id FROM warehouse_locations LIMIT 5');
+
+  if (!receiver || !worker || products.length < 3 || lots.length < 3 || pallets.length < 3 || locations.length < 3) {
+    return;
+  }
+
+  await queryRun(`
     INSERT INTO inventory_transactions (
       transaction_type, product_id, lot_id, pallet_id,
       from_location_id, to_location_id, quantity, performed_by, notes
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-
-  insert.run('RECEIVE', products[0].id, lots[0].id, pallets[0].id, null, pallets[0].location_id, 500, receiver.id, 'Initial receiving');
-  insert.run('RECEIVE', products[1].id, lots[1].id, pallets[1].id, null, pallets[1].location_id, 100, receiver.id, 'Fragrance oil received');
-  insert.run('MOVE', products[0].id, lots[0].id, pallets[0].id, locations[0].id, locations[1].id, 500, worker.id, 'Moved to staging');
-  insert.run('PICK', products[2].id, lots[2].id, pallets[2].id, locations[2].id, null, 50, worker.id, 'Picked for production');
-  insert.run('CONSUME', products[0].id, lots[0].id, null, locations[1].id, null, 25, worker.id, 'Consumed in production');
+  `, 'RECEIVE', products[0].id, lots[0].id, pallets[0].id, null, pallets[0].location_id, 500, receiver.id, 'Initial receiving');
+  await queryRun(`
+    INSERT INTO inventory_transactions (
+      transaction_type, product_id, lot_id, pallet_id,
+      from_location_id, to_location_id, quantity, performed_by, notes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, 'RECEIVE', products[1].id, lots[1].id, pallets[1].id, null, pallets[1].location_id, 100, receiver.id, 'Fragrance oil received');
+  await queryRun(`
+    INSERT INTO inventory_transactions (
+      transaction_type, product_id, lot_id, pallet_id,
+      from_location_id, to_location_id, quantity, performed_by, notes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, 'MOVE', products[0].id, lots[0].id, pallets[0].id, locations[0].id, locations[1].id, 500, worker.id, 'Moved to staging');
+  await queryRun(`
+    INSERT INTO inventory_transactions (
+      transaction_type, product_id, lot_id, pallet_id,
+      from_location_id, to_location_id, quantity, performed_by, notes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, 'PICK', products[2].id, lots[2].id, pallets[2].id, locations[2].id, null, 50, worker.id, 'Picked for production');
+  await queryRun(`
+    INSERT INTO inventory_transactions (
+      transaction_type, product_id, lot_id, pallet_id,
+      from_location_id, to_location_id, quantity, performed_by, notes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, 'CONSUME', products[0].id, lots[0].id, null, locations[1].id, null, 25, worker.id, 'Consumed in production');
 }
 
-function seedFulfillment(): void {
-  const admin = db.prepare('SELECT id FROM users WHERE email = ?').get('admin@demo.com') as { id: number };
-  const driverUser = db.prepare('SELECT id FROM users WHERE email = ?').get('driver@demo.com') as { id: number };
-  const fgProduct = db.prepare('SELECT id FROM products WHERE sku = ?').get('FG-001') as { id: number };
+async function seedFulfillment(): Promise<void> {
+  const existing = await queryOne<{ c: number }>(
+    'SELECT COUNT(*) as c FROM orders WHERE order_number = ?',
+    'ORD-2026-00001'
+  );
+  if ((existing?.c ?? 0) > 0) return;
 
-  db.prepare('INSERT INTO drivers (user_id, license_number, phone) VALUES (?, ?, ?)')
-    .run(driverUser.id, 'DL-DEMO-001', '555-0100');
-  const driver = db.prepare('SELECT id FROM drivers WHERE user_id = ?').get(driverUser.id) as { id: number };
+  const admin = await queryOne<{ id: number }>('SELECT id FROM users WHERE email = ?', 'admin@demo.com');
+  const driverUser = await queryOne<{ id: number }>('SELECT id FROM users WHERE email = ?', 'driver@demo.com');
+  const fgProduct = await queryOne<{ id: number }>('SELECT id FROM products WHERE sku = ?', 'FG-001');
 
-  const custResult = db.prepare(`INSERT INTO customers (name, email, phone) VALUES (?, ?, ?)`)
-    .run('Luxury Retail Co', 'orders@luxuryretail.com', '555-1000');
+  if (!admin || !driverUser || !fgProduct) return;
+
+  await queryRun(driverInsertIgnoreSql(), driverUser.id, 'DL-DEMO-001', '555-0100');
+  const driver = await queryOne<{ id: number }>('SELECT id FROM drivers WHERE user_id = ?', driverUser.id);
+  if (!driver) return;
+
+  const custResult = await queryRun(
+    `INSERT INTO customers (name, email, phone) VALUES (?, ?, ?)`,
+    'Luxury Retail Co',
+    'orders@luxuryretail.com',
+    '555-1000'
+  );
   const customerId = Number(custResult.lastInsertRowid);
 
-  const addrResult = db.prepare(`
+  const addrResult = await queryRun(`
     INSERT INTO customer_addresses (customer_id, label, line1, city, state, postal_code, country, is_default)
     VALUES (?, 'HQ', '100 Fashion Ave', 'New York', 'NY', '10001', 'US', 1)
-  `).run(customerId);
+  `, customerId);
   const addressId = Number(addrResult.lastInsertRowid);
 
-  const orderResult = db.prepare(`
+  const orderResult = await queryRun(`
     INSERT INTO orders (order_number, customer_id, delivery_address_id, status, priority, estimated_ship_date, estimated_delivery_date, created_by)
-    VALUES ('ORD-2026-00001', ?, ?, 'ALLOCATED', 'HIGH', date('now', '+1 day'), date('now', '+3 days'), ?)
-  `).run(customerId, addressId, admin.id);
+    VALUES ('ORD-2026-00001', ?, ?, 'ALLOCATED', 'HIGH', ${sqlDateOffset('+1 day')}, ${sqlDateOffset('+3 days')}, ?)
+  `, customerId, addressId, admin.id);
   const orderId = Number(orderResult.lastInsertRowid);
 
-  const itemResult = db.prepare(`
+  const itemResult = await queryRun(`
     INSERT INTO order_items (order_id, product_id, quantity_ordered, quantity_reserved)
     VALUES (?, ?, 100, 100)
-  `).run(orderId, fgProduct.id);
+  `, orderId, fgProduct.id);
   const orderItemId = Number(itemResult.lastInsertRowid);
 
-  const pallet = db.prepare(`
+  const pallet = await queryOne<{ id: number; lot_id: number; quantity: number }>(`
     SELECT pl.id, pl.lot_id, pl.quantity FROM pallets pl
     JOIN lots l ON l.id = pl.lot_id
     WHERE pl.product_id = ? AND pl.status = 'ACTIVE' AND l.qc_status = 'PASSED' LIMIT 1
-  `).get(fgProduct.id) as { id: number; lot_id: number; quantity: number };
+  `, fgProduct.id);
 
   if (pallet) {
-    db.prepare(`
+    await queryRun(`
       INSERT INTO inventory_reservations (order_id, order_item_id, product_id, pallet_id, lot_id, quantity_reserved, status)
       VALUES (?, ?, ?, ?, ?, 100, 'RESERVED')
-    `).run(orderId, orderItemId, fgProduct.id, pallet.id, pallet.lot_id);
+    `, orderId, orderItemId, fgProduct.id, pallet.id, pallet.lot_id);
 
-    const plResult = db.prepare(`INSERT INTO pick_lists (order_id, status) VALUES (?, 'PENDING')`).run(orderId);
+    const plResult = await queryRun(`INSERT INTO pick_lists (order_id, status) VALUES (?, 'PENDING')`, orderId);
     const pickListId = Number(plResult.lastInsertRowid);
-    const loc = db.prepare('SELECT location_id FROM pallets WHERE id = ?').get(pallet.id) as { location_id: number };
+    const loc = await queryOne<{ location_id: number }>(
+      'SELECT location_id FROM pallets WHERE id = ?',
+      pallet.id
+    );
 
-    db.prepare(`
-      INSERT INTO pick_list_items (pick_list_id, order_item_id, pallet_id, lot_id, product_id, location_id, quantity_to_pick)
-      VALUES (?, ?, ?, ?, ?, ?, 100)
-    `).run(pickListId, orderItemId, pallet.id, pallet.lot_id, fgProduct.id, loc.location_id);
+    if (loc) {
+      await queryRun(`
+        INSERT INTO pick_list_items (pick_list_id, order_item_id, pallet_id, lot_id, product_id, location_id, quantity_to_pick)
+        VALUES (?, ?, ?, ?, ?, ?, 100)
+      `, pickListId, orderItemId, pallet.id, pallet.lot_id, fgProduct.id, loc.location_id);
+    }
 
-    db.prepare(`INSERT INTO fulfillment_tasks (order_id, task_type, status, priority, due_date) VALUES (?, 'PICK', 'PENDING', 'HIGH', date('now'))`).run(orderId);
-    db.prepare(`INSERT INTO fulfillment_tasks (order_id, task_type, status, priority, due_date) VALUES (?, 'PACK', 'PENDING', 'HIGH', date('now'))`).run(orderId);
+    await queryRun(`
+      INSERT INTO fulfillment_tasks (order_id, task_type, status, priority, due_date)
+      VALUES (?, 'PICK', 'PENDING', 'HIGH', ${sqlToday()})
+    `, orderId);
+    await queryRun(`
+      INSERT INTO fulfillment_tasks (order_id, task_type, status, priority, due_date)
+      VALUES (?, 'PACK', 'PENDING', 'HIGH', ${sqlToday()})
+    `, orderId);
   }
 
-  db.prepare(`
+  await queryRun(`
     INSERT INTO orders (order_number, customer_id, delivery_address_id, status, priority, created_by, notes)
     VALUES ('ORD-2026-00002', ?, ?, 'INVENTORY_CHECK', 'NORMAL', ?, 'Awaiting inventory check')
-  `).run(customerId, addressId, admin.id);
+  `, customerId, addressId, admin.id);
 
-  db.prepare(`
+  await queryRun(`
     INSERT INTO order_items (order_id, product_id, quantity_ordered)
     SELECT id, ?, 500 FROM orders WHERE order_number = 'ORD-2026-00002'
-  `).run(fgProduct.id);
+  `, fgProduct.id);
 
-  db.prepare(`
+  await queryRun(`
     INSERT INTO orders (order_number, customer_id, delivery_address_id, status, priority, estimated_ship_date, estimated_delivery_date, created_by)
-    VALUES ('ORD-2026-00003', ?, ?, 'READY_FOR_PICKUP', 'URGENT', date('now'), date('now', '+1 day'), ?)
-  `).run(customerId, addressId, admin.id);
+    VALUES ('ORD-2026-00003', ?, ?, 'READY_FOR_PICKUP', 'URGENT', ${sqlToday()}, ${sqlDateOffset('+1 day')}, ?)
+  `, customerId, addressId, admin.id);
 
-  const readyOrder = db.prepare('SELECT id FROM orders WHERE order_number = ?').get('ORD-2026-00003') as { id: number };
-  db.prepare(`INSERT INTO order_items (order_id, product_id, quantity_ordered, quantity_reserved, quantity_picked, quantity_packed) VALUES (?, ?, 50, 50, 50, 50)`)
-    .run(readyOrder.id, fgProduct.id);
+  const readyOrder = await queryOne<{ id: number }>(
+    'SELECT id FROM orders WHERE order_number = ?',
+    'ORD-2026-00003'
+  );
+  if (!readyOrder) return;
 
-  db.prepare(`
+  await queryRun(
+    `INSERT INTO order_items (order_id, product_id, quantity_ordered, quantity_reserved, quantity_picked, quantity_packed) VALUES (?, ?, 50, 50, 50, 50)`,
+    readyOrder.id,
+    fgProduct.id
+  );
+
+  await queryRun(`
     INSERT INTO packages (order_id, package_barcode, status, packed_by, packed_at)
-    VALUES (?, 'PKG-3-001', 'PACKED', ?, datetime('now'))
-  `).run(readyOrder.id, admin.id);
+    VALUES (?, 'PKG-3-001', 'PACKED', ?, ${sqlNow()})
+  `, readyOrder.id, admin.id);
 
-  db.prepare(`
+  await queryRun(`
     INSERT INTO deliveries (order_id, driver_id, status, delivery_address_id, priority, package_count, assigned_at, pickup_location)
-    VALUES (?, ?, 'ASSIGNED', ?, 'URGENT', 1, datetime('now'), 'Main Warehouse')
-  `).run(readyOrder.id, driver.id, addressId);
+    VALUES (?, ?, 'ASSIGNED', ?, 'URGENT', 1, ${sqlNow()}, 'Main Warehouse')
+  `, readyOrder.id, driver.id, addressId);
 
-  const delivery = db.prepare('SELECT id FROM deliveries WHERE order_id = ?').get(readyOrder.id) as { id: number };
-  db.prepare(`INSERT INTO driver_assignments (driver_id, delivery_id, order_id, status) VALUES (?, ?, ?, 'ASSIGNED')`)
-    .run(driver.id, delivery.id, readyOrder.id);
+  const delivery = await queryOne<{ id: number }>(
+    'SELECT id FROM deliveries WHERE order_id = ?',
+    readyOrder.id
+  );
+  if (delivery) {
+    await queryRun(
+      `INSERT INTO driver_assignments (driver_id, delivery_id, order_id, status) VALUES (?, ?, ?, 'ASSIGNED')`,
+      driver.id,
+      delivery.id,
+      readyOrder.id
+    );
+  }
 }

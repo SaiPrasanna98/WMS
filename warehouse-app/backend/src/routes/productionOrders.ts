@@ -1,15 +1,15 @@
 import { Router, Request, Response } from 'express';
-import db from '../db';
 import { authenticate } from '../middleware/auth';
 import { requirePermission, blockViewerWrite } from '../middleware/rbac';
 import { createAuditLog, createInventoryTransaction, ensureNonNegativeInventory, generateId } from '../services/inventory';
 import { assertPositiveQuantity, assertValidTransition, PRODUCTION_TRANSITIONS } from '../services/validation';
+import { queryOne, queryAll, queryRun, transaction, sqlNow } from '../db/query';
 
 const router = Router();
 
 router.use(authenticate);
 
-router.get('/', requirePermission('production.read'), (req: Request, res: Response) => {
+router.get('/', requirePermission('production.read'), async (req: Request, res: Response) => {
   const { status, search } = req.query;
   let query = `
     SELECT po.*, p.sku, p.name as product_name, u.full_name as created_by_name
@@ -30,26 +30,26 @@ router.get('/', requirePermission('production.read'), (req: Request, res: Respon
   }
   query += ' ORDER BY po.created_at DESC';
 
-  res.json(db.prepare(query).all(...params));
+  res.json(await queryAll(query, ...params));
 });
 
-router.get('/:id', requirePermission('production.read'), (req: Request, res: Response) => {
-  const order = db.prepare(`
+router.get('/:id', requirePermission('production.read'), async (req: Request, res: Response) => {
+  const order = await queryOne(`
     SELECT po.*, p.sku, p.name as product_name
     FROM production_orders po JOIN products p ON p.id = po.product_id WHERE po.id = ?
-  `).get(req.params.id);
+  `, req.params.id);
   if (!order) { res.status(404).json({ error: 'Production order not found' }); return; }
 
-  const materials = db.prepare(`
+  const materials = await queryAll(`
     SELECT pm.*, p.sku, p.name as product_name
     FROM production_materials pm JOIN products p ON p.id = pm.product_id
     WHERE pm.production_order_id = ?
-  `).all(req.params.id);
+  `, req.params.id);
 
   res.json({ ...order, materials });
 });
 
-router.post('/', requirePermission('production.write'), blockViewerWrite, (req: Request, res: Response) => {
+router.post('/', requirePermission('production.write'), blockViewerWrite, async (req: Request, res: Response) => {
   const { productId, quantityPlanned, scheduledDate, notes, materials } = req.body;
   if (!productId || !quantityPlanned) {
     res.status(400).json({ error: 'Product ID and planned quantity are required' });
@@ -60,35 +60,33 @@ router.post('/', requirePermission('production.write'), blockViewerWrite, (req: 
     const qty = assertPositiveQuantity(quantityPlanned, 'quantity planned');
     const orderNumber = generateId('PRO');
 
-    const createOrder = db.transaction(() => {
-      const result = db.prepare(`
+    const orderId = await transaction(async () => {
+      const result = await queryRun(`
         INSERT INTO production_orders (order_number, product_id, quantity_planned, scheduled_date, created_by, notes)
         VALUES (?, ?, ?, ?, ?, ?)
-      `).run(orderNumber, productId, qty, scheduledDate || null, req.user!.id, notes || null);
+      `, orderNumber, productId, qty, scheduledDate || null, req.user!.id, notes || null);
       const orderId = Number(result.lastInsertRowid);
 
       if (materials?.length) {
-        const insertMat = db.prepare(`
+
+        for (const m of materials) {
+          await queryRun(`
           INSERT INTO production_materials (production_order_id, product_id, quantity_required)
           VALUES (?, ?, ?)
-        `);
-        for (const m of materials) {
-          insertMat.run(orderId, m.productId, assertPositiveQuantity(m.quantityRequired, 'quantity required'));
+        `, orderId, m.productId, assertPositiveQuantity(m.quantityRequired, 'quantity required'));
         }
       }
 
       return orderId;
     });
-
-    const orderId = createOrder();
-    createAuditLog({ userId: req.user!.id, action: 'CREATE', entityType: 'production_order', entityId: orderId, newValue: { productId, quantityPlanned: qty } });
+    await createAuditLog({ userId: req.user!.id, action: 'CREATE', entityType: 'production_order', entityId: orderId, newValue: { productId, quantityPlanned: qty } });
     res.status(201).json({ id: orderId, orderNumber });
   } catch (err) {
     res.status(400).json({ error: (err as Error).message });
   }
 });
 
-router.patch('/:id/status', requirePermission('production.write'), blockViewerWrite, (req: Request, res: Response) => {
+router.patch('/:id/status', requirePermission('production.write'), blockViewerWrite, async (req: Request, res: Response) => {
   const { status } = req.body;
   const id = Number(req.params.id);
   const validStatuses = ['CREATED', 'MATERIAL_REQUESTED', 'IN_PROGRESS', 'COMPLETED', 'QC_PENDING'];
@@ -98,7 +96,7 @@ router.patch('/:id/status', requirePermission('production.write'), blockViewerWr
     return;
   }
 
-  const existing = db.prepare('SELECT * FROM production_orders WHERE id = ?').get(id) as { status: string } | undefined;
+  const existing = await queryOne('SELECT * FROM production_orders WHERE id = ?', id) as { status: string } | undefined;
   if (!existing) { res.status(404).json({ error: 'Production order not found' }); return; }
 
   if (existing.status === status) {
@@ -114,16 +112,16 @@ router.patch('/:id/status', requirePermission('production.write'), blockViewerWr
   }
 
   if (status === 'COMPLETED' || status === 'QC_PENDING') {
-    db.prepare(`UPDATE production_orders SET status = ?, completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(status, id);
+    await queryRun(`UPDATE production_orders SET status = ?, completed_at = ${sqlNow()}, updated_at = ${sqlNow()} WHERE id = ?`, status, id);
   } else {
-    db.prepare(`UPDATE production_orders SET status = ?, updated_at = datetime('now') WHERE id = ?`).run(status, id);
+    await queryRun(`UPDATE production_orders SET status = ?, updated_at = ${sqlNow()} WHERE id = ?`, status, id);
   }
 
   if (status === 'MATERIAL_REQUESTED') {
-    db.prepare(`UPDATE production_materials SET status = 'REQUESTED', updated_at = datetime('now') WHERE production_order_id = ?`).run(id);
+    await queryRun(`UPDATE production_materials SET status = 'REQUESTED', updated_at = ${sqlNow()} WHERE production_order_id = ?`, id);
   }
 
-  createAuditLog({
+  await createAuditLog({
     userId: req.user!.id,
     action: 'STATUS_CHANGE',
     entityType: 'production_order',
@@ -134,7 +132,7 @@ router.patch('/:id/status', requirePermission('production.write'), blockViewerWr
   res.json({ message: 'Status updated' });
 });
 
-router.post('/:id/consume', requirePermission('production.consume'), blockViewerWrite, (req: Request, res: Response) => {
+router.post('/:id/consume', requirePermission('production.consume'), blockViewerWrite, async (req: Request, res: Response) => {
   const { materialId, palletId, quantity } = req.body;
   const orderId = Number(req.params.id);
 
@@ -146,11 +144,11 @@ router.post('/:id/consume', requirePermission('production.consume'), blockViewer
   try {
     const qty = assertPositiveQuantity(quantity);
 
-    const material = db.prepare(`
+    const material = await queryOne(`
       SELECT pm.*, p.sku FROM production_materials pm
       JOIN products p ON p.id = pm.product_id
       WHERE pm.id = ? AND pm.production_order_id = ?
-    `).get(materialId, orderId) as { product_id: number; quantity_required: number; quantity_consumed: number } | undefined;
+    `, materialId, orderId) as { product_id: number; quantity_required: number; quantity_consumed: number } | undefined;
 
     if (!material) { res.status(404).json({ error: 'Material not found' }); return; }
 
@@ -159,11 +157,11 @@ router.post('/:id/consume', requirePermission('production.consume'), blockViewer
       return;
     }
 
-    const pallet = db.prepare(`
+    const pallet = await queryOne(`
       SELECT pl.*, l.qc_status FROM pallets pl
       JOIN lots l ON l.id = pl.lot_id
       WHERE pl.id = ? AND pl.status = 'ACTIVE'
-    `).get(palletId) as { id: number; product_id: number; lot_id: number; quantity: number; location_id: number; qc_status: string } | undefined;
+    `, palletId) as { id: number; product_id: number; lot_id: number; quantity: number; location_id: number; qc_status: string } | undefined;
 
     if (!pallet) { res.status(404).json({ error: 'Pallet not found or not active' }); return; }
     if (pallet.product_id !== material.product_id) {
@@ -179,23 +177,23 @@ router.post('/:id/consume', requirePermission('production.consume'), blockViewer
       return;
     }
 
-    ensureNonNegativeInventory(material.product_id, -qty);
+    await ensureNonNegativeInventory(material.product_id, -qty);
 
-    const consumeTransaction = db.transaction(() => {
+    await transaction(async () => {
       const newConsumed = material.quantity_consumed + qty;
       const newStatus = newConsumed >= material.quantity_required ? 'CONSUMED' : 'ALLOCATED';
 
-      db.prepare(`
-        UPDATE production_materials SET quantity_consumed = ?, status = ?, pallet_id = ?, updated_at = datetime('now')
+      await queryRun(`
+        UPDATE production_materials SET quantity_consumed = ?, status = ?, pallet_id = ?, updated_at = ${sqlNow()}
         WHERE id = ?
-      `).run(newConsumed, newStatus, palletId, materialId);
+      `, newConsumed, newStatus, palletId, materialId);
 
       const newQty = pallet.quantity - qty;
-      db.prepare(`
-        UPDATE pallets SET quantity = ?, status = ?, updated_at = datetime('now') WHERE id = ?
-      `).run(newQty, newQty <= 0 ? 'DEPLETED' : 'ACTIVE', pallet.id);
+      await queryRun(`
+        UPDATE pallets SET quantity = ?, status = ?, updated_at = ${sqlNow()} WHERE id = ?
+      `, newQty, newQty <= 0 ? 'DEPLETED' : 'ACTIVE', pallet.id);
 
-      createInventoryTransaction({
+      await createInventoryTransaction({
         transactionType: 'CONSUME',
         productId: material.product_id,
         lotId: pallet.lot_id,
@@ -208,9 +206,7 @@ router.post('/:id/consume', requirePermission('production.consume'), blockViewer
         notes: `Consumed for production order ${orderId}`,
       });
     });
-
-    consumeTransaction();
-    createAuditLog({
+    await createAuditLog({
       userId: req.user!.id,
       action: 'UPDATE',
       entityType: 'production_material',

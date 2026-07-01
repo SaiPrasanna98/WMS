@@ -9,15 +9,21 @@
     "start": "node dist/index.js",
     "seed": "tsx src/db/seed.ts",
     "init-db": "tsx src/db/init.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:push": "drizzle-kit push",
     "test": "tsx --test src/tests/business-rules.test.ts src/tests/fulfillment.test.ts && tsx --test src/tests/pick-inventory.test.ts"
   },
   "dependencies": {
+    "@types/pg": "^8.20.0",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.7.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
+    "drizzle-kit": "^0.31.10",
+    "drizzle-orm": "^0.45.2",
     "express": "^4.21.2",
-    "jsonwebtoken": "^9.0.2"
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.22.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

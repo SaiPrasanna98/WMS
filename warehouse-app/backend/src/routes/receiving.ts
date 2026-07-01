@@ -1,17 +1,17 @@
 import { Router, Request, Response } from 'express';
-import db from '../db';
 import { authenticate } from '../middleware/auth';
 import { requirePermission, blockViewerWrite } from '../middleware/rbac';
 import { createAuditLog, createInventoryTransaction, generateId } from '../services/inventory';
 import { assertPositiveQuantity } from '../services/validation';
 import { applyPoLineReceipt } from '../services/purchaseOrders';
+import { queryOne, queryAll, queryRun, transaction } from '../db/query';
 
 const router = Router();
 
 router.use(authenticate);
 
-router.get('/', requirePermission('receiving.read'), (_req: Request, res: Response) => {
-  const records = db.prepare(`
+router.get('/', requirePermission('receiving.read'), async (_req: Request, res: Response) => {
+  const records = await queryAll(`
     SELECT rr.*, p.sku, p.name as product_name, pl.pallet_id as pallet_code,
            l.lot_number, wl.code as location_code, u.full_name as received_by_name,
            po.po_number
@@ -23,34 +23,34 @@ router.get('/', requirePermission('receiving.read'), (_req: Request, res: Respon
     JOIN users u ON u.id = rr.received_by
     LEFT JOIN purchase_orders po ON po.id = rr.purchase_order_id
     ORDER BY rr.received_at DESC
-  `).all();
+  `);
   res.json(records);
 });
 
-router.get('/purchase-orders', requirePermission('receiving.read'), (_req: Request, res: Response) => {
-  const orders = db.prepare(`
+router.get('/purchase-orders', requirePermission('receiving.read'), async (_req: Request, res: Response) => {
+  const orders = await queryAll(`
     SELECT po.*,
       (SELECT COUNT(*) FROM purchase_order_items WHERE purchase_order_id = po.id) as line_count
     FROM purchase_orders po
     WHERE po.status IN ('OPEN', 'PARTIAL')
     ORDER BY po.created_at DESC
-  `).all();
+  `);
   res.json(orders);
 });
 
-router.get('/purchase-orders/:id/lines', requirePermission('receiving.read'), (req: Request, res: Response) => {
-  const lines = db.prepare(`
+router.get('/purchase-orders/:id/lines', requirePermission('receiving.read'), async (req: Request, res: Response) => {
+  const lines = await queryAll(`
     SELECT poi.*, p.sku, p.name as product_name,
            (poi.quantity_ordered - poi.quantity_received) as quantity_remaining
     FROM purchase_order_items poi
     JOIN products p ON p.id = poi.product_id
     WHERE poi.purchase_order_id = ?
     ORDER BY poi.id
-  `).all(req.params.id);
+  `, req.params.id);
   res.json(lines);
 });
 
-router.post('/', requirePermission('receiving.write'), blockViewerWrite, (req: Request, res: Response) => {
+router.post('/', requirePermission('receiving.write'), blockViewerWrite, async (req: Request, res: Response) => {
   const { purchaseOrderId, purchaseOrderLineId, productId, quantity, locationId, lotNumber, palletCode, notes } = req.body;
 
   if (!productId || !quantity || !locationId) {
@@ -61,34 +61,34 @@ router.post('/', requirePermission('receiving.write'), blockViewerWrite, (req: R
   try {
     const qty = assertPositiveQuantity(quantity);
 
-    const location = db.prepare('SELECT id FROM warehouse_locations WHERE id = ? AND is_active = 1').get(locationId);
+    const location = await queryOne('SELECT id FROM warehouse_locations WHERE id = ? AND is_active = 1', locationId);
     if (!location) { res.status(404).json({ error: 'Location not found or inactive' }); return; }
 
-    const product = db.prepare('SELECT id FROM products WHERE id = ? AND is_active = 1').get(productId);
+    const product = await queryOne('SELECT id FROM products WHERE id = ? AND is_active = 1', productId);
     if (!product) { res.status(404).json({ error: 'Product not found' }); return; }
 
     const finalLotNumber = lotNumber || generateId('LOT');
     const finalPalletCode = palletCode || generateId('PLT');
 
-    const receiveTransaction = db.transaction(() => {
-      const lotResult = db.prepare(`
+    const result = await transaction(async () => {
+      const lotResult = await queryRun(`
         INSERT INTO lots (lot_number, product_id, quantity, qc_status, received_date)
         VALUES (?, ?, ?, 'PENDING', date('now'))
-      `).run(finalLotNumber, productId, qty);
+      `, finalLotNumber, productId, qty);
       const lotId = Number(lotResult.lastInsertRowid);
 
-      const palletResult = db.prepare(`
+      const palletResult = await queryRun(`
         INSERT INTO pallets (pallet_id, lot_id, product_id, quantity, location_id)
         VALUES (?, ?, ?, ?, ?)
-      `).run(finalPalletCode, lotId, productId, qty, locationId);
+      `, finalPalletCode, lotId, productId, qty, locationId);
       const palletId = Number(palletResult.lastInsertRowid);
 
-      const recordResult = db.prepare(`
+      const recordResult = await queryRun(`
         INSERT INTO receiving_records (purchase_order_id, lot_id, pallet_id, product_id, quantity_received, received_by, location_id, notes)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(purchaseOrderId || null, lotId, palletId, productId, qty, req.user!.id, locationId, notes || null);
+      `, purchaseOrderId || null, lotId, palletId, productId, qty, req.user!.id, locationId, notes || null);
 
-      createInventoryTransaction({
+      await createInventoryTransaction({
         transactionType: 'RECEIVE',
         productId,
         lotId,
@@ -102,14 +102,12 @@ router.post('/', requirePermission('receiving.write'), blockViewerWrite, (req: R
       });
 
       if (purchaseOrderId) {
-        applyPoLineReceipt(Number(purchaseOrderId), productId, qty, purchaseOrderLineId ? Number(purchaseOrderLineId) : undefined);
+        await applyPoLineReceipt(Number(purchaseOrderId), productId, qty, purchaseOrderLineId ? Number(purchaseOrderLineId) : undefined);
       }
 
       return { lotId, palletId, recordId: Number(recordResult.lastInsertRowid), lotNumber: finalLotNumber, palletCode: finalPalletCode };
     });
-
-    const result = receiveTransaction();
-    createAuditLog({
+    await createAuditLog({
       userId: req.user!.id,
       action: 'CREATE',
       entityType: 'receiving_record',

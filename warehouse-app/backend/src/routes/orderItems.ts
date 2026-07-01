@@ -1,12 +1,12 @@
 import { Router, Request, Response } from 'express';
-import db from '../db';
 import { authenticate } from '../middleware/auth';
 import { requirePermission } from '../middleware/rbac';
+import { queryAll } from '../db/query';
 
 const router = Router();
 router.use(authenticate);
 
-router.get('/', requirePermission('orders.read'), (req: Request, res: Response) => {
+router.get('/', requirePermission('orders.read'), async (req: Request, res: Response) => {
   const { orderId } = req.query;
   let query = `
     SELECT oi.*, p.sku, p.name as product_name, o.order_number
@@ -18,7 +18,7 @@ router.get('/', requirePermission('orders.read'), (req: Request, res: Response) 
   const params: unknown[] = [];
   if (orderId) { query += ' AND oi.order_id = ?'; params.push(orderId); }
   query += ' ORDER BY oi.id';
-  res.json(db.prepare(query).all(...params));
+  res.json(await queryAll(query, ...params));
 });
 
 export default router;

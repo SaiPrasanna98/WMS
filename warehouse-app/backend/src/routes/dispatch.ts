@@ -6,8 +6,8 @@ import { getDispatchBoard } from '../services/dispatch';
 const router = Router();
 router.use(authenticate);
 
-router.get('/board', requirePermission('drivers.read'), (_req: Request, res: Response) => {
-  res.json(getDispatchBoard());
+router.get('/board', requirePermission('drivers.read'), async (_req: Request, res: Response) => {
+  res.json(await getDispatchBoard());
 });
 
 export default router;

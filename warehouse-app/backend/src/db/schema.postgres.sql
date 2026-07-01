@@ -1,28 +1,28 @@
 -- Warehouse Operations Database Schema
 
 CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
   full_name TEXT NOT NULL,
   is_active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
+  updated_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS roles (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
   description TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS permissions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   code TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
   module TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS user_roles (
@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS role_permissions (
 );
 
 CREATE TABLE IF NOT EXISTS products (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   sku TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
   description TEXT,
@@ -47,12 +47,12 @@ CREATE TABLE IF NOT EXISTS products (
   unit_price REAL NOT NULL DEFAULT 0,
   reorder_level REAL NOT NULL DEFAULT 0,
   is_active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
+  updated_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS warehouse_locations (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   code TEXT NOT NULL UNIQUE,
   zone TEXT NOT NULL,
   aisle TEXT,
@@ -60,12 +60,12 @@ CREATE TABLE IF NOT EXISTS warehouse_locations (
   shelf TEXT,
   location_type TEXT NOT NULL CHECK (location_type IN ('STORAGE', 'STAGING', 'PRODUCTION', 'SHIPPING', 'QC')),
   is_active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
+  updated_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS lots (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   lot_number TEXT NOT NULL UNIQUE,
   product_id INTEGER NOT NULL REFERENCES products(id),
   quantity REAL NOT NULL DEFAULT 0 CHECK (quantity >= 0),
@@ -73,46 +73,46 @@ CREATE TABLE IF NOT EXISTS lots (
   expiry_date TEXT,
   received_date TEXT,
   notes TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
+  updated_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS pallets (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   pallet_id TEXT NOT NULL UNIQUE,
   lot_id INTEGER NOT NULL REFERENCES lots(id),
   product_id INTEGER NOT NULL REFERENCES products(id),
   quantity REAL NOT NULL DEFAULT 0 CHECK (quantity >= 0),
   location_id INTEGER REFERENCES warehouse_locations(id),
   status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'DEPLETED', 'HOLD')),
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
+  updated_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS purchase_orders (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   po_number TEXT NOT NULL UNIQUE,
   supplier_name TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'PARTIAL', 'RECEIVED', 'CANCELLED')),
   expected_date TEXT,
   notes TEXT,
   created_by INTEGER REFERENCES users(id),
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
+  updated_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS purchase_order_items (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
   product_id INTEGER NOT NULL REFERENCES products(id),
   quantity_ordered REAL NOT NULL CHECK (quantity_ordered > 0),
   quantity_received REAL NOT NULL DEFAULT 0,
   unit_cost REAL NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS receiving_records (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   purchase_order_id INTEGER REFERENCES purchase_orders(id),
   lot_id INTEGER NOT NULL REFERENCES lots(id),
   pallet_id INTEGER NOT NULL REFERENCES pallets(id),
@@ -120,12 +120,12 @@ CREATE TABLE IF NOT EXISTS receiving_records (
   quantity_received REAL NOT NULL,
   received_by INTEGER NOT NULL REFERENCES users(id),
   location_id INTEGER REFERENCES warehouse_locations(id),
-  received_at TEXT NOT NULL DEFAULT (datetime('now')),
+  received_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
   notes TEXT
 );
 
 CREATE TABLE IF NOT EXISTS inventory_transactions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   transaction_type TEXT NOT NULL CHECK (transaction_type IN (
     'RECEIVE', 'MOVE', 'PICK', 'CONSUME', 'ADJUST', 'SHIP', 'QC_HOLD', 'QC_RELEASE'
   )),
@@ -139,11 +139,11 @@ CREATE TABLE IF NOT EXISTS inventory_transactions (
   reference_id INTEGER,
   performed_by INTEGER NOT NULL REFERENCES users(id),
   notes TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS production_orders (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   order_number TEXT NOT NULL UNIQUE,
   product_id INTEGER NOT NULL REFERENCES products(id),
   quantity_planned REAL NOT NULL,
@@ -156,35 +156,35 @@ CREATE TABLE IF NOT EXISTS production_orders (
   completed_at TEXT,
   created_by INTEGER NOT NULL REFERENCES users(id),
   notes TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
+  updated_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS production_materials (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   production_order_id INTEGER NOT NULL REFERENCES production_orders(id) ON DELETE CASCADE,
   product_id INTEGER NOT NULL REFERENCES products(id),
   quantity_required REAL NOT NULL,
   quantity_consumed REAL NOT NULL DEFAULT 0,
   pallet_id INTEGER REFERENCES pallets(id),
   status TEXT NOT NULL DEFAULT 'REQUESTED' CHECK (status IN ('REQUESTED', 'ALLOCATED', 'CONSUMED')),
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
+  updated_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS qc_records (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   lot_id INTEGER NOT NULL REFERENCES lots(id),
   product_id INTEGER NOT NULL REFERENCES products(id),
   status TEXT NOT NULL CHECK (status IN ('PENDING', 'PASSED', 'FAILED', 'HOLD')),
   inspected_by INTEGER NOT NULL REFERENCES users(id),
   notes TEXT,
-  inspected_at TEXT NOT NULL DEFAULT (datetime('now')),
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  inspected_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS shipments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   shipment_number TEXT NOT NULL UNIQUE,
   customer_name TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT', 'PICKING', 'PACKED', 'SHIPPED')),
@@ -192,22 +192,22 @@ CREATE TABLE IF NOT EXISTS shipments (
   tracking_number TEXT,
   created_by INTEGER NOT NULL REFERENCES users(id),
   notes TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
+  updated_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS shipment_items (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   shipment_id INTEGER NOT NULL REFERENCES shipments(id) ON DELETE CASCADE,
   product_id INTEGER NOT NULL REFERENCES products(id),
   lot_id INTEGER NOT NULL REFERENCES lots(id),
   pallet_id INTEGER REFERENCES pallets(id),
   quantity REAL NOT NULL CHECK (quantity > 0),
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS audit_logs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   user_id INTEGER REFERENCES users(id),
   action TEXT NOT NULL CHECK (action IN ('CREATE', 'UPDATE', 'DELETE', 'STATUS_CHANGE', 'LOGIN')),
   entity_type TEXT NOT NULL,
@@ -215,7 +215,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   old_value TEXT,
   new_value TEXT,
   ip_address TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_pallets_location ON pallets(location_id);
@@ -226,36 +226,23 @@ CREATE INDEX IF NOT EXISTS idx_inventory_tx_product ON inventory_transactions(pr
 CREATE INDEX IF NOT EXISTS idx_inventory_tx_created ON inventory_transactions(created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id);
 
-CREATE TABLE IF NOT EXISTS customer_notifications (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  customer_id INTEGER NOT NULL REFERENCES customers(id),
-  order_id INTEGER REFERENCES orders(id),
-  channel TEXT NOT NULL DEFAULT 'EMAIL' CHECK (channel IN ('EMAIL', 'SMS')),
-  notification_type TEXT NOT NULL,
-  recipient TEXT NOT NULL,
-  subject TEXT NOT NULL,
-  body TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'SENT' CHECK (status IN ('QUEUED', 'SENT', 'FAILED')),
-  sent_at TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
 CREATE INDEX IF NOT EXISTS idx_production_orders_status ON production_orders(status);
 CREATE INDEX IF NOT EXISTS idx_shipments_status ON shipments(status);
 
 -- Order Fulfillment & Delivery Management
 
 CREATE TABLE IF NOT EXISTS customers (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
   email TEXT,
   phone TEXT,
   is_active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
+  updated_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS customer_addresses (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
   label TEXT NOT NULL DEFAULT 'Primary',
   line1 TEXT NOT NULL,
@@ -265,11 +252,11 @@ CREATE TABLE IF NOT EXISTS customer_addresses (
   postal_code TEXT,
   country TEXT NOT NULL DEFAULT 'US',
   is_default INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS orders (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   order_number TEXT NOT NULL UNIQUE,
   customer_id INTEGER NOT NULL REFERENCES customers(id),
   delivery_address_id INTEGER NOT NULL REFERENCES customer_addresses(id),
@@ -288,23 +275,23 @@ CREATE TABLE IF NOT EXISTS orders (
   override_reason TEXT,
   created_by INTEGER NOT NULL REFERENCES users(id),
   notes TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
+  updated_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS order_items (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
   product_id INTEGER NOT NULL REFERENCES products(id),
   quantity_ordered REAL NOT NULL CHECK (quantity_ordered > 0),
   quantity_reserved REAL NOT NULL DEFAULT 0,
   quantity_picked REAL NOT NULL DEFAULT 0,
   quantity_packed REAL NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS inventory_reservations (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
   order_item_id INTEGER NOT NULL REFERENCES order_items(id) ON DELETE CASCADE,
   product_id INTEGER NOT NULL REFERENCES products(id),
@@ -312,32 +299,32 @@ CREATE TABLE IF NOT EXISTS inventory_reservations (
   lot_id INTEGER NOT NULL REFERENCES lots(id),
   quantity_reserved REAL NOT NULL CHECK (quantity_reserved > 0),
   status TEXT NOT NULL DEFAULT 'RESERVED' CHECK (status IN ('RESERVED', 'PICKED', 'PACKED', 'RELEASED')),
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
+  updated_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS fulfillment_tasks (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
   task_type TEXT NOT NULL CHECK (task_type IN ('PICK', 'PACK', 'RELEASE')),
   assigned_to INTEGER REFERENCES users(id),
   status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED')),
   priority TEXT NOT NULL DEFAULT 'NORMAL' CHECK (priority IN ('LOW', 'NORMAL', 'HIGH', 'URGENT')),
   due_date TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
+  updated_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS pick_lists (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
   status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED')),
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
+  updated_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS pick_list_items (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   pick_list_id INTEGER NOT NULL REFERENCES pick_lists(id) ON DELETE CASCADE,
   order_item_id INTEGER NOT NULL REFERENCES order_items(id),
   pallet_id INTEGER NOT NULL REFERENCES pallets(id),
@@ -347,31 +334,31 @@ CREATE TABLE IF NOT EXISTS pick_list_items (
   quantity_to_pick REAL NOT NULL CHECK (quantity_to_pick > 0),
   quantity_picked REAL NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'PICKED', 'SKIPPED')),
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS packages (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
   package_barcode TEXT NOT NULL UNIQUE,
   status TEXT NOT NULL DEFAULT 'CREATED' CHECK (status IN ('CREATED', 'PACKED', 'RELEASED', 'IN_TRANSIT', 'DELIVERED')),
   packed_by INTEGER REFERENCES users(id),
   packed_at TEXT,
   released_at TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS package_items (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   package_id INTEGER NOT NULL REFERENCES packages(id) ON DELETE CASCADE,
   order_item_id INTEGER NOT NULL REFERENCES order_items(id),
   product_id INTEGER NOT NULL REFERENCES products(id),
   quantity REAL NOT NULL CHECK (quantity > 0),
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS drivers (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL UNIQUE REFERENCES users(id),
   license_number TEXT,
   phone TEXT,
@@ -379,11 +366,11 @@ CREATE TABLE IF NOT EXISTS drivers (
   status TEXT NOT NULL DEFAULT 'AVAILABLE' CHECK (status IN ('AVAILABLE', 'ON_ROUTE', 'OFF_DUTY')),
   max_active_deliveries INTEGER NOT NULL DEFAULT 3,
   is_active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS deliveries (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   order_id INTEGER NOT NULL REFERENCES orders(id),
   driver_id INTEGER REFERENCES drivers(id),
   status TEXT NOT NULL DEFAULT 'ASSIGNED' CHECK (status IN (
@@ -400,34 +387,34 @@ CREATE TABLE IF NOT EXISTS deliveries (
   carrier_name TEXT,
   tracking_number TEXT,
   delivery_method TEXT NOT NULL DEFAULT 'INTERNAL_DRIVER' CHECK (delivery_method IN ('INTERNAL_DRIVER', 'CARRIER')),
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
+  updated_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS driver_assignments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   driver_id INTEGER NOT NULL REFERENCES drivers(id),
   delivery_id INTEGER NOT NULL REFERENCES deliveries(id) ON DELETE CASCADE,
   order_id INTEGER NOT NULL REFERENCES orders(id),
   status TEXT NOT NULL DEFAULT 'ASSIGNED' CHECK (status IN (
     'ASSIGNED', 'ARRIVED_AT_WAREHOUSE', 'PICKED_UP', 'IN_TRANSIT', 'DELIVERED', 'DELIVERY_FAILED'
   )),
-  assigned_at TEXT NOT NULL DEFAULT (datetime('now'))
+  assigned_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS delivery_proofs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   delivery_id INTEGER NOT NULL UNIQUE REFERENCES deliveries(id),
   recipient_name TEXT NOT NULL,
-  delivered_at TEXT NOT NULL DEFAULT (datetime('now')),
+  delivered_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
   signature_data TEXT,
   photo_data TEXT,
   notes TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS invoices (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   invoice_number TEXT NOT NULL UNIQUE,
   order_id INTEGER NOT NULL UNIQUE REFERENCES orders(id),
   customer_id INTEGER NOT NULL REFERENCES customers(id),
@@ -442,40 +429,19 @@ CREATE TABLE IF NOT EXISTS invoices (
   due_date TEXT,
   paid_at TEXT,
   notes TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
+  updated_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE TABLE IF NOT EXISTS invoice_line_items (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
   product_id INTEGER NOT NULL REFERENCES products(id),
   description TEXT NOT NULL,
   quantity REAL NOT NULL CHECK (quantity > 0),
   unit_price REAL NOT NULL DEFAULT 0,
   line_total REAL NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS organization_settings (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  org_name TEXT NOT NULL DEFAULT 'Warehouse Operations',
-  allowed_domains TEXT NOT NULL DEFAULT 'demo.com',
-  invite_expiry_days INTEGER NOT NULL DEFAULT 7,
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS user_invitations (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  email TEXT NOT NULL,
-  full_name TEXT NOT NULL,
-  role_ids TEXT NOT NULL,
-  invited_by INTEGER NOT NULL REFERENCES users(id),
-  token TEXT NOT NULL UNIQUE,
-  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'ACCEPTED', 'REVOKED', 'EXPIRED')),
-  expires_at TEXT NOT NULL,
-  accepted_at TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
@@ -492,5 +458,48 @@ CREATE INDEX IF NOT EXISTS idx_deliveries_order ON deliveries(order_id);
 CREATE INDEX IF NOT EXISTS idx_deliveries_status ON deliveries(status);
 CREATE INDEX IF NOT EXISTS idx_invoices_order ON invoices(order_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_customer ON invoices(customer_id);
+
+CREATE TABLE IF NOT EXISTS customer_notifications (
+  id SERIAL PRIMARY KEY,
+  customer_id INTEGER NOT NULL REFERENCES customers(id),
+  order_id INTEGER REFERENCES orders(id),
+  channel TEXT NOT NULL DEFAULT 'EMAIL' CHECK (channel IN ('EMAIL', 'SMS')),
+  notification_type TEXT NOT NULL,
+  recipient TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  body TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'SENT' CHECK (status IN ('QUEUED', 'SENT', 'FAILED')),
+  sent_at TEXT,
+  created_at TEXT NOT NULL DEFAULT TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+);
+
+CREATE TABLE IF NOT EXISTS order_idempotency_keys (
+  idempotency_key TEXT PRIMARY KEY,
+  order_id INTEGER NOT NULL REFERENCES orders(id),
+  response_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+);
+CREATE TABLE IF NOT EXISTS organization_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  org_name TEXT NOT NULL DEFAULT 'Warehouse Operations',
+  allowed_domains TEXT NOT NULL DEFAULT 'demo.com',
+  invite_expiry_days INTEGER NOT NULL DEFAULT 7,
+  updated_at TEXT NOT NULL DEFAULT TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+);
+CREATE TABLE IF NOT EXISTS user_invitations (
+  id SERIAL PRIMARY KEY,
+  email TEXT NOT NULL,
+  full_name TEXT NOT NULL,
+  role_ids TEXT NOT NULL,
+  invited_by INTEGER NOT NULL REFERENCES users(id),
+  token TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'ACCEPTED', 'REVOKED', 'EXPIRED')),
+  expires_at TEXT NOT NULL,
+  accepted_at TEXT,
+  created_at TEXT NOT NULL DEFAULT TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+);
 CREATE INDEX IF NOT EXISTS idx_invitations_email ON user_invitations(email);
 CREATE INDEX IF NOT EXISTS idx_invitations_status ON user_invitations(status);
+CREATE INDEX IF NOT EXISTS idx_notifications_customer ON customer_notifications(customer_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_order ON customer_notifications(order_id);
+CREATE INDEX IF NOT EXISTS idx_po_items_po ON purchase_order_items(purchase_order_id);

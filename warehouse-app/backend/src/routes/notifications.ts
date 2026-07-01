@@ -1,12 +1,12 @@
 import { Router, Request, Response } from 'express';
-import db from '../db';
 import { authenticate } from '../middleware/auth';
 import { requirePermission } from '../middleware/rbac';
+import { queryAll } from '../db/query';
 
 const router = Router();
 router.use(authenticate);
 
-router.get('/', requirePermission('notifications.read'), (req: Request, res: Response) => {
+router.get('/', requirePermission('notifications.read'), async (req: Request, res: Response) => {
   const { customerId, orderId } = req.query;
   let query = `
     SELECT n.*, c.name as customer_name
@@ -26,7 +26,7 @@ router.get('/', requirePermission('notifications.read'), (req: Request, res: Res
   }
   query += ' ORDER BY n.created_at DESC LIMIT 200';
 
-  res.json(db.prepare(query).all(...params));
+  res.json(await queryAll(query, ...params));
 });
 
 export default router;

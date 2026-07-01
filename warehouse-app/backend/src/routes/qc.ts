@@ -1,14 +1,14 @@
 import { Router, Request, Response } from 'express';
-import db from '../db';
 import { authenticate } from '../middleware/auth';
 import { requirePermission, blockViewerWrite } from '../middleware/rbac';
 import { createAuditLog, createInventoryTransaction } from '../services/inventory';
+import { queryOne, queryAll, queryRun, transaction, sqlNow } from '../db/query';
 
 const router = Router();
 
 router.use(authenticate);
 
-router.get('/', requirePermission('qc.read'), (req: Request, res: Response) => {
+router.get('/', requirePermission('qc.read'), async (req: Request, res: Response) => {
   const { status, search } = req.query;
   let query = `
     SELECT l.id as lot_id, l.lot_number, l.qc_status, l.quantity, l.received_date,
@@ -29,22 +29,22 @@ router.get('/', requirePermission('qc.read'), (req: Request, res: Response) => {
   }
   query += ' ORDER BY l.updated_at DESC';
 
-  res.json(db.prepare(query).all(...params));
+  res.json(await queryAll(query, ...params));
 });
 
-router.get('/records', requirePermission('qc.read'), (_req: Request, res: Response) => {
-  const records = db.prepare(`
+router.get('/records', requirePermission('qc.read'), async (_req: Request, res: Response) => {
+  const records = await queryAll(`
     SELECT qr.*, l.lot_number, p.sku, p.name as product_name, u.full_name as inspector_name
     FROM qc_records qr
     JOIN lots l ON l.id = qr.lot_id
     JOIN products p ON p.id = qr.product_id
     JOIN users u ON u.id = qr.inspected_by
     ORDER BY qr.inspected_at DESC
-  `).all();
+  `);
   res.json(records);
 });
 
-router.post('/:lotId/inspect', requirePermission('qc.write'), blockViewerWrite, (req: Request, res: Response) => {
+router.post('/:lotId/inspect', requirePermission('qc.write'), blockViewerWrite, async (req: Request, res: Response) => {
   const { status, notes } = req.body;
   const lotId = Number(req.params.lotId);
   const validStatuses = ['PENDING', 'PASSED', 'FAILED', 'HOLD'];
@@ -54,22 +54,22 @@ router.post('/:lotId/inspect', requirePermission('qc.write'), blockViewerWrite, 
     return;
   }
 
-  const lot = db.prepare('SELECT * FROM lots WHERE id = ?').get(lotId) as {
+  const lot = await queryOne('SELECT * FROM lots WHERE id = ?', lotId) as {
     id: number; product_id: number; qc_status: string;
   } | undefined;
 
   if (!lot) { res.status(404).json({ error: 'Lot not found' }); return; }
 
-  const inspectTransaction = db.transaction(() => {
-    db.prepare(`UPDATE lots SET qc_status = ?, updated_at = datetime('now') WHERE id = ?`).run(status, lotId);
+  const recordId = await transaction(async () => {
+    await queryRun(`UPDATE lots SET qc_status = ?, updated_at = ${sqlNow()} WHERE id = ?`, status, lotId);
 
-    const result = db.prepare(`
+    const result = await queryRun(`
       INSERT INTO qc_records (lot_id, product_id, status, inspected_by, notes)
       VALUES (?, ?, ?, ?, ?)
-    `).run(lotId, lot.product_id, status, req.user!.id, notes || null);
+    `, lotId, lot.product_id, status, req.user!.id, notes || null);
 
     if (status === 'HOLD' || status === 'FAILED') {
-      createInventoryTransaction({
+      await createInventoryTransaction({
         transactionType: status === 'HOLD' ? 'QC_HOLD' : 'QC_HOLD',
         productId: lot.product_id,
         lotId,
@@ -77,9 +77,9 @@ router.post('/:lotId/inspect', requirePermission('qc.write'), blockViewerWrite, 
         performedBy: req.user!.id,
         notes: notes || `QC ${status}`,
       });
-      db.prepare(`UPDATE pallets SET status = 'HOLD', updated_at = datetime('now') WHERE lot_id = ? AND status = 'ACTIVE'`).run(lotId);
+      await queryRun(`UPDATE pallets SET status = 'HOLD', updated_at = ${sqlNow()} WHERE lot_id = ? AND status = 'ACTIVE'`, lotId);
     } else if (status === 'PASSED' && (lot.qc_status === 'HOLD' || lot.qc_status === 'FAILED')) {
-      createInventoryTransaction({
+      await createInventoryTransaction({
         transactionType: 'QC_RELEASE',
         productId: lot.product_id,
         lotId,
@@ -87,14 +87,12 @@ router.post('/:lotId/inspect', requirePermission('qc.write'), blockViewerWrite, 
         performedBy: req.user!.id,
         notes: notes || 'QC Hold released',
       });
-      db.prepare(`UPDATE pallets SET status = 'ACTIVE', updated_at = datetime('now') WHERE lot_id = ? AND status = 'HOLD'`).run(lotId);
+      await queryRun(`UPDATE pallets SET status = 'ACTIVE', updated_at = ${sqlNow()} WHERE lot_id = ? AND status = 'HOLD'`, lotId);
     }
 
     return Number(result.lastInsertRowid);
   });
-
-  const recordId = inspectTransaction();
-  createAuditLog({
+  await createAuditLog({
     userId: req.user!.id,
     action: 'STATUS_CHANGE',
     entityType: 'lot',

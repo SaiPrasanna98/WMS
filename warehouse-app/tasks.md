@@ -171,6 +171,55 @@
 
 ---
 
+## Task-22: Dual-database foundation (Drizzle + query layer)
+**Status:** ✅ Complete  
+**Output:** `client.ts`, `query.ts`, `dialect.ts`, `schema.ts`, `schema.postgres.sql`, `drizzle.config.ts`, async startup, `/api/health` with DB ping  
+**Acceptance:** Backend starts on SQLite; health returns `database: sqlite`, `dbConnected: true`
+
+---
+
+## Task-23: Seed + migrations async
+**Status:** ✅ Complete  
+**Output:** Async `seed.ts`, `migrate.ts`, `init.ts`; Postgres-aware `INSERT OR IGNORE`  
+**Acceptance:** `npm run init-db` seeds demo data; restart is idempotent
+
+---
+
+## Task-24: Auth middleware + routes async
+**Status:** ✅ Complete  
+**Output:** `authenticate` async; all 30 route files use query layer  
+**Acceptance:** Login works; JWT middleware loads permissions
+
+---
+
+## Task-25: Services async conversion
+**Status:** ✅ Complete  
+**Output:** All 8 service files async (`fulfillment`, `billing`, `inventory`, etc.)  
+**Acceptance:** O2C flow operations use awaited transactions
+
+---
+
+## Task-26: Remaining routes + admin
+**Status:** ✅ Complete  
+**Output:** Dashboard, users, roles, deliveries, invoices, etc. converted  
+**Acceptance:** All API routes async; no sync `db.prepare` in routes/services
+
+---
+
+## Task-27: Tests updated
+**Status:** ✅ Complete  
+**Output:** `business-rules.test.ts`, `pick-inventory.test.ts` use query layer  
+**Acceptance:** `npm test` — 13 tests pass on SQLite
+
+---
+
+## Task-28: Neon + dual-DB documentation
+**Status:** ✅ Complete  
+**Output:** README Neon section, design.md architecture, emta-data.md env vars  
+**Acceptance:** Docs explain `DATABASE_URL` vs `DATABASE_PATH`
+
+---
+
 ## Task Summary
 
 | Task | Module | Est. Time | Status |

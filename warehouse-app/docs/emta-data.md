@@ -28,7 +28,9 @@
 | Runtime | Node.js | 18+ |
 | Backend Framework | Express | 4.x |
 | Backend Language | TypeScript | 5.x |
-| Database | SQLite (better-sqlite3) | 11.x |
+| Database (local) | SQLite (better-sqlite3) | 11.x |
+| Database (cloud) | Neon Postgres (pg Pool) | 8.x |
+| ORM / migrations | Drizzle ORM + drizzle-kit | 0.45.x |
 | Auth | JWT + bcryptjs | — |
 | Frontend Framework | React | 18.x |
 | Build Tool | Vite | 6.x |
@@ -41,7 +43,8 @@
 | PORT | backend/.env | 3001 | API server port |
 | JWT_SECRET | backend/.env | (dev default) | JWT signing secret |
 | JWT_EXPIRES_IN | backend/.env | 8h | Token expiry |
-| DATABASE_PATH | backend/.env | ./data/warehouse.db | SQLite file path |
+| DATABASE_PATH | backend/.env | ./data/warehouse.db | SQLite file path (used when DATABASE_URL unset) |
+| DATABASE_URL | backend/.env | (unset) | Neon Postgres connection string; when set, overrides SQLite |
 
 ## Ports
 | Service | Port | URL |
@@ -103,3 +106,4 @@
 | 2026-06-24 | Audit trail detail view, entity-type filter, invitation accept flow | System |
 | 2026-06-30 | Pick reduces pallet/lot qty; inventory shows Reserved column; delivery no longer double-deducts | System |
 | 2026-06-22 | Comprehensive README: setup, O2C walkthrough, full RBAC matrix (10 roles), API overview | System |
+| 2026-07-01 | Dual-database: SQLite local + Neon Postgres via async query layer, Drizzle schema, health check | System |

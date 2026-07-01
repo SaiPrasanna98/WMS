@@ -1,24 +1,42 @@
-import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { runMigrations } from './migrate';
+import { getSqliteDb } from './client';
+import { isPostgres, queryExec } from './query';
 
-const dbPath = process.env.DATABASE_PATH || path.join(__dirname, '../../data/warehouse.db');
-const dbDir = path.dirname(dbPath);
+export { isPostgres, pingDb, queryAll, queryOne, queryRun, queryExec, transaction, getDbDriver } from './query';
+export { getSqliteDb, getPgPool, closeConnections } from './client';
 
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
-}
+export async function initializeDatabase(): Promise<void> {
+  if (isPostgres()) {
+    const schemaPath = path.join(__dirname, 'schema.postgres.sql');
+    const schema = fs
+      .readFileSync(schemaPath, 'utf-8')
+      .split('\n')
+      .filter(line => !line.trim().startsWith('--'))
+      .join('\n');
+    const statements = schema
+      .split(';')
+      .map(s => s.trim())
+      .filter(s => s.length > 0);
+    for (const statement of statements) {
+      try {
+        await queryExec(`${statement};`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.includes('already exists')) continue;
+        throw err;
+      }
+    }
+    await runMigrations();
+    return;
+  }
 
-const db = new Database(dbPath);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
-
-export function initializeDatabase(): void {
   const schemaPath = path.join(__dirname, 'schema.sql');
   const schema = fs.readFileSync(schemaPath, 'utf-8');
-  db.exec(schema);
-  runMigrations();
+  getSqliteDb().exec(schema);
+  await runMigrations();
 }
 
-export default db;
+/** @deprecated Import from ./query instead */
+export { default } from './query';

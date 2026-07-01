@@ -15,10 +15,12 @@
 │  auth middleware → rbac middleware → route handlers          │
 │  services: inventory.ts (transactions, audit, helpers)       │
 └──────────────────────────┬──────────────────────────────────┘
-                           │ better-sqlite3
+                           │ async query layer (Drizzle schema)
 ┌──────────────────────────▼──────────────────────────────────┐
-│                    SQLite Database                           │
-│  schema.sql │ seed.ts │ data/warehouse.db                   │
+│              Database (env-selected driver)                  │
+│  SQLite (local): DATABASE_PATH → better-sqlite3              │
+│  Neon Postgres: DATABASE_URL → pg Pool                     │
+│  schema.sql / schema.postgres.sql │ seed.ts │ migrations     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -31,9 +33,15 @@
 backend/src/
   index.ts              # Express app, route mounting
   db/
-    index.ts            # DB connection + init
-    schema.sql          # DDL
+    index.ts            # DB init + exports
+    client.ts           # SQLite / Postgres connection pool
+    query.ts            # Async query layer (dual dialect)
+    dialect.ts          # SQL dialect helpers
+    schema.ts           # Drizzle ORM table definitions
+    schema.sql          # SQLite DDL (local init)
+    schema.postgres.sql # Postgres DDL (Neon init)
     seed.ts             # Demo data
+    migrate.ts          # Incremental migrations
     init.ts             # CLI init script
   middleware/
     auth.ts             # JWT authenticate

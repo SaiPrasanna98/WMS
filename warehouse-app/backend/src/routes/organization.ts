@@ -8,19 +8,19 @@ const router = Router();
 
 router.use(authenticate);
 
-router.get('/', requirePermission('users.read'), (_req: Request, res: Response) => {
-  res.json(getOrganizationSettings());
+router.get('/', requirePermission('users.read'), async (_req: Request, res: Response) => {
+  res.json(await getOrganizationSettings());
 });
 
-router.put('/', requirePermission('users.write'), blockViewerWrite, (req: Request, res: Response) => {
+router.put('/', requirePermission('users.write'), blockViewerWrite, async (req: Request, res: Response) => {
   try {
-    const before = getOrganizationSettings();
-    const updated = saveOrganizationSettings({
+    const before = await getOrganizationSettings();
+    const updated = await saveOrganizationSettings({
       orgName: req.body.orgName,
       allowedDomains: req.body.allowedDomains,
       inviteExpiryDays: req.body.inviteExpiryDays,
     });
-    createAuditLog({
+    await createAuditLog({
       userId: req.user!.id,
       action: 'UPDATE',
       entityType: 'organization',

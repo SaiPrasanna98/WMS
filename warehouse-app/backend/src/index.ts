@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { initializeDatabase } from './db';
 import { seedDatabase } from './db/seed';
+import { getDbDriver, pingDb } from './db/query';
 
 import authRoutes from './routes/auth';
 import usersRoutes from './routes/users';
@@ -42,17 +43,20 @@ if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
   process.exit(1);
 }
 
-initializeDatabase();
-seedDatabase();
-
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors({ origin: process.env.CORS_ORIGIN || true }));
 app.use(express.json({ limit: '1mb' }));
 
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+app.get('/api/health', async (_req, res) => {
+  const dbOk = await pingDb();
+  res.status(dbOk ? 200 : 503).json({
+    status: dbOk ? 'ok' : 'degraded',
+    database: getDbDriver(),
+    dbConnected: dbOk,
+    timestamp: new Date().toISOString(),
+  });
 });
 
 app.use('/api/auth', authRoutes);
@@ -95,6 +99,15 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
   res.status(500).json({ error: 'Internal server error' });
 });
 
-app.listen(PORT, () => {
-  console.log(`Warehouse API running on http://localhost:${PORT}`);
+async function start(): Promise<void> {
+  await initializeDatabase();
+  await seedDatabase();
+  app.listen(PORT, () => {
+    console.log(`Warehouse API running on http://localhost:${PORT} (${getDbDriver()})`);
+  });
+}
+
+start().catch((err) => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
 });

@@ -1,9 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import db from '../db';
+import { queryAll, queryOne } from '../db/query';
 import { AuthUser, JwtPayload } from '../types';
 
-export function authenticate(req: Request, res: Response, next: NextFunction): void {
+export async function authenticate(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
     res.status(401).json({ error: 'Authentication required' });
@@ -15,27 +15,27 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
     const secret = process.env.JWT_SECRET || 'warehouse-jwt-secret-change-in-production';
     const payload = jwt.verify(token, secret) as JwtPayload;
 
-    const user = db.prepare(`
+    const user = await queryOne<{ id: number; email: string; full_name: string; is_active: number }>(`
       SELECT id, email, full_name, is_active FROM users WHERE id = ?
-    `).get(payload.userId) as { id: number; email: string; full_name: string; is_active: number } | undefined;
+    `, payload.userId);
 
     if (!user || !user.is_active) {
       res.status(401).json({ error: 'Invalid or inactive user' });
       return;
     }
 
-    const roles = db.prepare(`
+    const roles = await queryAll<{ name: string }>(`
       SELECT r.name FROM roles r
       JOIN user_roles ur ON ur.role_id = r.id
       WHERE ur.user_id = ?
-    `).all(user.id) as { name: string }[];
+    `, user.id);
 
-    const permissions = db.prepare(`
+    const permissions = await queryAll<{ code: string }>(`
       SELECT DISTINCT p.code FROM permissions p
       JOIN role_permissions rp ON rp.permission_id = p.id
       JOIN user_roles ur ON ur.role_id = rp.role_id
       WHERE ur.user_id = ?
-    `).all(user.id) as { code: string }[];
+    `, user.id);
 
     req.user = {
       id: user.id,
@@ -57,5 +57,5 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction): 
     next();
     return;
   }
-  authenticate(req, _res, next);
+  void authenticate(req, _res, next);
 }

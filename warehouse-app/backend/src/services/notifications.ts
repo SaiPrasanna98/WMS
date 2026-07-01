@@ -1,4 +1,4 @@
-import db from '../db';
+import { queryOne, queryRun, sqlNow } from '../db/query';
 
 export type NotificationType =
   | 'ORDER_CREATED'
@@ -16,13 +16,13 @@ interface NotifyParams {
   body: string;
 }
 
-export function sendCustomerNotification(params: NotifyParams): number {
+export async function sendCustomerNotification(params: NotifyParams): Promise<number> {
   const status = process.env.NOTIFICATIONS_ENABLED === 'false' ? 'QUEUED' : 'SENT';
-  const result = db.prepare(`
+  const result = await queryRun(`
     INSERT INTO customer_notifications (
       customer_id, order_id, channel, notification_type, recipient, subject, body, status, sent_at
-    ) VALUES (?, ?, 'EMAIL', ?, ?, ?, ?, ?, datetime('now'))
-  `).run(
+    ) VALUES (?, ?, 'EMAIL', ?, ?, ?, ?, ?, ${sqlNow()})
+  `,
     params.customerId,
     params.orderId ?? null,
     params.type,
@@ -39,15 +39,17 @@ export function sendCustomerNotification(params: NotifyParams): number {
   return Number(result.lastInsertRowid);
 }
 
-export function notifyOrderCreated(
+export async function notifyOrderCreated(
   customerId: number,
   orderId: number,
   orderNumber: string,
   estimatedDelivery?: string,
   invoiceNumber?: string,
-): void {
-  const customer = db.prepare('SELECT name, email FROM customers WHERE id = ?').get(customerId) as
-    { name: string; email: string | null } | undefined;
+): Promise<void> {
+  const customer = await queryOne<{ name: string; email: string | null }>(
+    'SELECT name, email FROM customers WHERE id = ?',
+    customerId
+  );
   if (!customer?.email) return;
 
   const lines = [
@@ -60,7 +62,7 @@ export function notifyOrderCreated(
     'Thank you for your business.',
   ].filter(Boolean);
 
-  sendCustomerNotification({
+  await sendCustomerNotification({
     customerId,
     orderId,
     type: 'ORDER_CREATED',
@@ -70,17 +72,19 @@ export function notifyOrderCreated(
   });
 }
 
-export function notifyOrderDelivered(
+export async function notifyOrderDelivered(
   customerId: number,
   orderId: number,
   orderNumber: string,
   invoiceNumber?: string,
-): void {
-  const customer = db.prepare('SELECT name, email FROM customers WHERE id = ?').get(customerId) as
-    { name: string; email: string | null } | undefined;
+): Promise<void> {
+  const customer = await queryOne<{ name: string; email: string | null }>(
+    'SELECT name, email FROM customers WHERE id = ?',
+    customerId
+  );
   if (!customer?.email) return;
 
-  sendCustomerNotification({
+  await sendCustomerNotification({
     customerId,
     orderId,
     type: 'DELIVERED',
