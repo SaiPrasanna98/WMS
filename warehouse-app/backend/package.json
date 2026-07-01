@@ -1,0 +1,32 @@
+{
+  "name": "warehouse-backend",
+  "version": "1.0.0",
+  "description": "Warehouse operations API for fragrance/cosmetics manufacturing",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "seed": "tsx src/db/seed.ts",
+    "init-db": "tsx src/db/init.ts",
+    "test": "tsx --test src/tests/business-rules.test.ts src/tests/fulfillment.test.ts && tsx --test src/tests/pick-inventory.test.ts"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.7.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
