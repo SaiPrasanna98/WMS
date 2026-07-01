@@ -7,9 +7,20 @@ import { isPostgres, queryExec } from './query';
 export { isPostgres, pingDb, queryAll, queryOne, queryRun, queryExec, transaction, getDbDriver } from './query';
 export { getSqliteDb, getPgPool, closeConnections } from './client';
 
+function resolveDbFile(filename: string): string {
+  const candidates = [
+    path.join(__dirname, filename),
+    path.join(__dirname, '../../src/db', filename),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  throw new Error(`Database schema file not found: ${filename}`);
+}
+
 export async function initializeDatabase(): Promise<void> {
   if (isPostgres()) {
-    const schemaPath = path.join(__dirname, 'schema.postgres.sql');
+    const schemaPath = resolveDbFile('schema.postgres.sql');
     const schema = fs
       .readFileSync(schemaPath, 'utf-8')
       .split('\n')
@@ -32,7 +43,7 @@ export async function initializeDatabase(): Promise<void> {
     return;
   }
 
-  const schemaPath = path.join(__dirname, 'schema.sql');
+  const schemaPath = resolveDbFile('schema.sql');
   const schema = fs.readFileSync(schemaPath, 'utf-8');
   getSqliteDb().exec(schema);
   await runMigrations();
