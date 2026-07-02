@@ -288,7 +288,7 @@ export function UsersPage() {
     <div className="admin-center">
       <PageHeader
         title="Users & roles"
-        subtitle={org ? `${org.orgName} · Allowed domains: ${org.allowedDomains.join(', ')}` : 'Manage workforce access like Microsoft 365 admin center'}
+        subtitle={org ? `${org.orgName} · ${org.allowedDomains.join(', ')}` : 'Manage users, roles, and invitations'}
         action={canWrite && tab === 'users' && (
           <button className="btn btn-primary" onClick={() => { setLastInviteLink(''); setInviteOpen(true); }}>
             Invite user

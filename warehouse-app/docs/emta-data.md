@@ -106,4 +106,4 @@
 | 2026-06-24 | Audit trail detail view, entity-type filter, invitation accept flow | System |
 | 2026-06-30 | Pick reduces pallet/lot qty; inventory shows Reserved column; delivery no longer double-deducts | System |
 | 2026-06-22 | Comprehensive README: setup, O2C walkthrough, full RBAC matrix (10 roles), API overview | System |
-| 2026-07-01 | Dual-database: SQLite local + Neon Postgres via async query layer, Drizzle schema, health check | System |
+| 2026-07-01 | Production UX: removed demo login UI, API cold-start retry, toned down in-app copy | System |

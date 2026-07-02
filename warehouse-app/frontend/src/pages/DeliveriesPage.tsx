@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import api, { getErrorMessage } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { PageHeader, DataTable, Alert, Modal } from '../components/UI';
@@ -27,7 +27,7 @@ interface DeliveryRow {
 }
 
 export function DeliveriesPage() {
-  const { isViewer, hasPermission, user } = useAuth();
+  const { isViewer, hasPermission } = useAuth();
   const navigate = useNavigate();
   const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -161,22 +161,16 @@ export function DeliveriesPage() {
     <div>
       <PageHeader
         title="Deliveries"
-        subtitle={`${pendingCount} ready for dispatch · ${activeCount} assigned — ${user?.fullName}`}
+        subtitle={`${pendingCount} ready for dispatch · ${activeCount} in progress`}
       />
       {alert && <Alert type={alert.type} message={alert.message} onClose={() => setAlert(null)} />}
 
       {deliveries.length === 0 && !loading && (
         <div className="settings-card" style={{ padding: 16, marginBottom: 16 }}>
-          <h3 className="settings-card-title">Nothing to deliver yet</h3>
-          <p className="page-subtitle" style={{ marginBottom: 12 }}>
-            Deliveries appear after: <strong>Pick → Pack → Ready for pickup → Assign driver</strong>
+          <h3 className="settings-card-title">No deliveries</h3>
+          <p className="page-subtitle">
+            Deliveries appear after orders are picked, packed, and assigned to a driver.
           </p>
-          <ol style={{ marginLeft: 20, marginBottom: 12 }}>
-            <li>Go to <Link to="/fulfillment">Warehouse tasks</Link> — pick and pack the order</li>
-            <li>Go to <Link to="/dispatch">Dispatch</Link> — assign your driver (FedEx/tracking only if using an external carrier)</li>
-            <li>Return here to track status and complete delivery</li>
-          </ol>
-          {isDriverOnly && <p className="page-subtitle">You will only see deliveries assigned to you.</p>}
         </div>
       )}
 

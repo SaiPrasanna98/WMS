@@ -103,7 +103,7 @@ export function DriversPage() {
     <div>
       <PageHeader
         title="Drivers"
-        subtitle="Fleet profiles, availability, and capacity — drivers log in to complete deliveries"
+        subtitle="Fleet profiles and driver availability"
         action={canWrite && (
           <button className="btn btn-primary" onClick={openAdd}>Add driver</button>
         )}

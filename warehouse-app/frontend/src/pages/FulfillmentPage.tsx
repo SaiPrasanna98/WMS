@@ -24,7 +24,7 @@ interface PickListDetail {
 }
 
 export function FulfillmentPage() {
-  const { hasPermission, isViewer, user } = useAuth();
+  const { hasPermission, isViewer } = useAuth();
   const [data, setData] = useState<FulfillmentDashboard | null>(null);
   const [queue, setQueue] = useState<OrderQueue | null>(null);
   const [loading, setLoading] = useState(true);
@@ -61,7 +61,7 @@ export function FulfillmentPage() {
     try {
       const lists = await api.get(`/pick-lists?orderId=${orderId}`);
       if (!lists.data.length) {
-        setAlert({ type: 'error', message: 'No pick list yet — try Allocate stock first if order was confirmed without inventory.' });
+        setAlert({ type: 'error', message: 'No pick list available. Allocate stock before picking.' });
         return;
       }
       const detail = await api.get(`/pick-lists/${lists.data[0].id}`);
@@ -150,12 +150,12 @@ export function FulfillmentPage() {
     <div>
       <PageHeader
         title="Warehouse tasks"
-        subtitle={`Pick, pack, and release orders — logged in as ${user?.fullName} (${user?.roles[0] ?? 'user'})`}
+        subtitle="Pick, pack, and release orders"
       />
       {alert && <Alert type={alert.type} message={alert.message} onClose={() => setAlert(null)} />}
 
       {!canPick && !canPack && (
-        <Alert type="error" message="Your role cannot pick or pack. Log in as manager@demo.com or worker@demo.com. After backend restart, log out and back in to refresh permissions." />
+        <Alert type="error" message="Your account does not have permission to pick or pack orders. Contact your administrator." />
       )}
 
       <div className="inline-stats" style={{ marginBottom: 24 }}>

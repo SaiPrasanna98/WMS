@@ -75,7 +75,7 @@ export function DispatchPage() {
     <div>
       <PageHeader
         title="Dispatch"
-        subtitle="Assign packed orders to your own drivers. Use carrier tracking only when shipping via FedEx/UPS (optional)."
+        subtitle="Assign packed orders to drivers"
       />
       {alert && <Alert type={alert.type} message={alert.message} onClose={() => setAlert(null)} />}
 

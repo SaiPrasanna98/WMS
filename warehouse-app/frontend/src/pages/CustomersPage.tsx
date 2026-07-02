@@ -165,7 +165,7 @@ export function CustomersPage() {
     <div>
       <PageHeader
         title="Customers"
-        subtitle="Click any customer row to view details, edit contact info, and manage delivery addresses"
+        subtitle="Manage customer accounts and delivery addresses"
         action={canWrite && (
           <button className="btn btn-primary" onClick={() => setCreateOpen(true)}>Add customer</button>
         )}

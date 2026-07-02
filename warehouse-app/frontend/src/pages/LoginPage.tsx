@@ -1,11 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getErrorMessage } from '../api/client';
+import { getErrorMessage, warmupBackend } from '../api/client';
 import { getDefaultRoute } from '../utils/routing';
-
-const DEMO_PASSWORD = 'password123';
-const DEFAULT_DEMO_EMAIL = 'admin@demo.com';
 
 export function LoginPage() {
   const [email, setEmail] = useState('');
@@ -15,26 +12,22 @@ export function LoginPage() {
   const { login } = useAuth();
   const navigate = useNavigate();
 
-  const signIn = async (loginEmail: string, loginPassword: string) => {
+  useEffect(() => {
+    warmupBackend();
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     setError('');
     setLoading(true);
     try {
-      const loggedInUser = await login(loginEmail, loginPassword);
+      const loggedInUser = await login(email, password);
       navigate(getDefaultRoute(loggedInUser.permissions));
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    signIn(email, password);
-  };
-
-  const handleDemoLogin = () => {
-    signIn(DEFAULT_DEMO_EMAIL, DEMO_PASSWORD);
   };
 
   return (
@@ -58,6 +51,7 @@ export function LoginPage() {
               onChange={e => setEmail(e.target.value)}
               placeholder="you@company.com"
               required
+              autoComplete="username"
             />
           </div>
 
@@ -70,6 +64,7 @@ export function LoginPage() {
               onChange={e => setPassword(e.target.value)}
               placeholder="Password"
               required
+              autoComplete="current-password"
             />
           </div>
 
@@ -77,20 +72,6 @@ export function LoginPage() {
             {loading ? 'Signing in...' : 'Sign In'}
           </button>
         </form>
-
-        <div className="demo-hint">
-          <button
-            type="button"
-            className="btn btn-outline btn-block"
-            disabled={loading}
-            onClick={handleDemoLogin}
-          >
-            Try demo (Admin)
-          </button>
-          <p className="demo-hint-text">
-            Demo password for all roles: <strong>password123</strong>
-          </p>
-        </div>
       </div>
     </div>
   );
