@@ -52,7 +52,7 @@ api.interceptors.response.use(
     const config = error.config as RetryConfig | undefined;
     if (!config) return Promise.reject(error);
 
-    if (error.response?.status === 401 && !config.url?.includes('/auth/login')) {
+    if (error.response?.status === 401 && config.url?.includes('/auth/me')) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       window.location.href = '/login';

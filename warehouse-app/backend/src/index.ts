@@ -38,6 +38,10 @@ import proofOfDeliveryRoutes from './routes/proofOfDelivery';
 
 dotenv.config();
 
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+});
+
 if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
   console.error('FATAL: JWT_SECRET must be set in production');
   process.exit(1);

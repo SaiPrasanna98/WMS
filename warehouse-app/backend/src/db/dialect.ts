@@ -10,17 +10,27 @@ export function sqlNow(): string {
     : `datetime('now')`;
 }
 
+/** Today's date as YYYY-MM-DD text (SQLite date('now') equivalent for TEXT columns). */
+export function sqlToday(): string {
+  return isPostgres() ? `TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD')` : `date('now')`;
+}
+
 /** Date offset expression, e.g. sqlDateOffset('+7 days'). */
 export function sqlDateOffset(offset: string): string {
   if (isPostgres()) {
     const match = offset.match(/^([+-]?\d+)\s+days?$/i);
     if (match) {
       const days = parseInt(match[1], 10);
-      return `(CURRENT_DATE + INTERVAL '${days} days')::text`;
+      return `TO_CHAR(CURRENT_DATE + INTERVAL '${days} days', 'YYYY-MM-DD')`;
     }
-    return `CURRENT_DATE::text`;
+    return sqlToday();
   }
   return `date('now', '${offset}')`;
+}
+
+/** Extract YYYY-MM-DD from a TEXT datetime column. */
+export function sqlDateOf(column: string): string {
+  return isPostgres() ? `SUBSTRING(${column}, 1, 10)` : `date(${column})`;
 }
 
 /** Convert ? placeholders to $1, $2, ... for Postgres. */
@@ -31,12 +41,15 @@ export function toPgPlaceholders(sql: string): string {
 
 /** Adapt SQLite-oriented SQL for Postgres execution. */
 export function adaptSqlForPostgres(sql: string): string {
+  if (!isPostgres()) return sql;
+
   let adapted = sql;
 
   adapted = adapted.replace(/INSERT\s+OR\s+IGNORE\s+INTO/gi, 'INSERT INTO');
   adapted = adapted.replace(/datetime\('now'\)/gi, sqlNow());
   adapted = adapted.replace(/date\('now',\s*'([^']+)'\)/gi, (_m, offset: string) => sqlDateOffset(offset));
-  adapted = adapted.replace(/date\('now'\)/gi, isPostgres() ? `CURRENT_DATE::text` : `date('now')`);
+  adapted = adapted.replace(/date\('now'\)/gi, sqlToday());
+  adapted = adapted.replace(/\bdate\(([a-z_][\w.]*)\)/gi, (_m, column: string) => sqlDateOf(column));
 
   return adapted;
 }

@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs';
-import { sqlDateOffset } from './dialect';
+import { sqlDateOffset, sqlToday } from './dialect';
 import { isPostgres, queryAll, queryOne, queryRun, sqlNow } from './query';
 
 const PERMISSIONS = [
@@ -132,9 +132,6 @@ const DEMO_USERS = [
   { email: 'sales@demo.com', password: 'password123', fullName: 'Sales Representative', role: 'Sales' },
 ];
 
-function sqlToday(): string {
-  return isPostgres() ? 'CURRENT_DATE::text' : "date('now')";
-}
 
 function permissionInsertIgnoreSql(): string {
   return isPostgres()
